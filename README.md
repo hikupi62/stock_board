@@ -230,18 +230,18 @@ code,name,shares,avg_price,currency,note
 
 > 富士通 6702 は父保有分のため、CSVに含まれていても本アプリでは自動的に除外されます。
 
-## 🎨 共通仕様: PC/スマホで分けたコンパクトUI
+## 🎨 共通仕様: PC標準・スマホ最適化
 
-### CSS は @media クエリで PC / スマホを分離
-- **PC (≥641px)**: `padding-top: 1.0rem` ・h*の margin 0.5rem ・更新ボタンや自動更新UIが見やすい標準余白
-- **スマホ (≤640px)**: `padding-top: 0.5rem` ・h*の margin 0.3-0.4rem ・Homeタイル優先で余白詰め
-- 全タブのタイトルは h4 (`#### Portfolio` 等)
-- **ヘッダー** はPC/スマホ共通だが、CSS余白で自動調整:
-  - タイトル `#### 📈 Aさん株価ボード` + caption `📡 yfinance・遅延`
-  - 手動更新ボタン `🔄 手動更新` (primary)
-  - 自動更新 selectbox (ラベル表示)
-- **タブ下余白・caption 余白** は両方で詰め
-- Streamlit toolbar も `toolbarMode = "minimal"`
+### CSS は PC では Streamlit 標準を尊重し、スマホ用CSSだけ @media (max-width: 640px) に閉じ込め
+
+- **PC (≥641px)**: カスタムCSSなし → Streamlit 標準の padding / margin を使用
+  - 更新ボタン・自動更新UIが切れない
+  - 上部ツールバーと重ならない
+  - ヘッダー: `#### 📈 Aさん株価ボード` + caption + `🔄 手動更新` ボタン + 自動更新 selectbox (横3列で見やすい)
+- **スマホ (≤640px)**: `padding-top: 0.5rem` ・h*の margin 0.3rem ・タブ下余白 / caption も詰め
+- 全タブのタイトルは h4 (`#### Portfolio` 等)・Streamlit標準サイズで両方使い回し
+- グローバル `stHorizontalBlock` / `stButton` への CSS は**一切当てない**
+- Streamlit toolbar は `toolbarMode = "minimal"`
 - Home タイル用CSS は `.home-tile-grid` スコープに限定し、ヘッダー / Portfolio / Settings に影響しない
 
 ## 🎨 画面構成 (3タブ)

@@ -537,20 +537,10 @@ def inject_global_css() -> None:
     st.markdown(
         """
 <style>
-/* ===== PC (≥641px): 標準的な余白を残してヘッダー/Portfolio/Settingsを見やすく ===== */
-@media (min-width: 641px) {
-    .stApp .block-container {
-        padding-top: 1.0rem !important;
-        padding-bottom: 1.0rem !important;
-        padding-left: 1.0rem !important;
-        padding-right: 1.0rem !important;
-        max-width: 100% !important;
-    }
-    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
-        margin-top: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
-    }
-}
+/* ===== PC (≥641px): Streamlit標準を尊重・カスタマイズなし =====
+   PCでは余白・見出しmarginにカスタムCSSを当てない (上部が切れないように)。
+*/
+
 /* ===== スマホ (≤640px): 余白を詰めてHomeタイル優先 ===== */
 @media (max-width: 640px) {
     .stApp .block-container {
@@ -564,14 +554,14 @@ def inject_global_css() -> None:
         margin-top: 0.3rem !important;
         margin-bottom: 0.4rem !important;
     }
-}
-/* タブ下の余白 (共通・控えめに詰める) */
-div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
-    margin-bottom: 0.4rem !important;
-}
-.stApp [data-testid="stCaptionContainer"] {
-    margin-top: 0 !important;
-    margin-bottom: 0.2rem !important;
+    /* スマホのみタブ下を詰める */
+    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
+        margin-bottom: 0.3rem !important;
+    }
+    .stApp [data-testid="stCaptionContainer"] {
+        margin-top: 0 !important;
+        margin-bottom: 0.2rem !important;
+    }
 }
 
 /* ===== Home専用タイルグリッド (.home-tile-grid スコープ) ===== */
