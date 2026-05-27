@@ -524,83 +524,113 @@ def _build_home_rows(sub: pd.DataFrame, prices: dict[str, PriceData]) -> pd.Data
 
 
 def inject_global_css() -> None:
-    """スマホで st.columns が縦並びに潰れるのを防ぐCSSを1回挿入。"""
+    """Home画面のタイルレイアウト用CSS。
+
+    - st.columns 内を CSS grid で auto-fit にしてスマホ/PCで自動列数調整
+    - st.button をカード風にスタイリング (高さ80px・改行表示)
+    - 選択中タイルは primary タイプで青枠強調
+    """
     st.markdown(
         """
 <style>
-/* スマホ (狭幅画面) でst.columnsの内部要素を強制的に2列維持 */
+/* スマホ (狭幅画面): st.columns 内を grid auto-fit (最小幅 105px) */
 @media (max-width: 640px) {
     div[data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)) !important;
+        gap: 4px !important;
+    }
+}
+/* PC: st.columns 内を grid auto-fit (最小幅 140px) */
+@media (min-width: 641px) {
+    div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
         gap: 6px !important;
     }
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-        flex: 0 0 calc(50% - 3px) !important;
-        max-width: calc(50% - 3px) !important;
-        min-width: calc(50% - 3px) !important;
-    }
 }
-/* タイルカード */
-.tile-card {
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 8px 10px 6px 10px;
-    margin: 0 0 4px 0;
-    background: #ffffff;
-    min-height: 88px;
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
-.tile-name { font-weight: 600; font-size: 0.92rem; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile-code { color: #6b7280; font-size: 0.72rem; }
-.tile-price { font-size: 1.0rem; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.tile-chg { font-weight: 700; font-size: 0.88rem; font-variant-numeric: tabular-nums; }
-.tile-src { color: #9ca3af; font-size: 0.7rem; }
+/* st.button をカード風タイルに */
+div[data-testid="stHorizontalBlock"] .stButton > button {
+    height: auto !important;
+    min-height: 78px !important;
+    width: 100% !important;
+    padding: 8px 6px !important;
+    line-height: 1.35 !important;
+    white-space: pre-line !important;
+    text-align: center !important;
+    border: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+    color: #1f2937 !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+}
+div[data-testid="stHorizontalBlock"] .stButton > button:hover {
+    background: #f3f4f6 !important;
+    border-color: #9ca3af !important;
+}
+/* 選択中タイル (primary) */
+div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"] {
+    border-color: #2563eb !important;
+    background: #eff6ff !important;
+    color: #1f2937 !important;
+}
 </style>
 """,
         unsafe_allow_html=True,
     )
 
 
-def render_home_tile(row: pd.Series, price: PriceData, key_prefix: str) -> None:
-    """1銘柄=1タイル。情報を HTML カードで描画 + 下に「📊 チャート」ボタン。"""
+def render_home_tile(row: pd.Series, price: PriceData, key_prefix: str, show_code: bool = False) -> None:
+    """1銘柄=1タイル。st.button をカード化してクリック=チャート選択にする。
+
+    ラベルは複数行 (銘柄名 / [コード] / 価格 / 騰落率) で構成。
+    `show_code=False` で コードを省略 (スマホ向け・推奨)。
+    """
     code = str(row.get("code", "")).strip()
     name = str(row.get("name", "")).strip()
     currency = str(row.get("currency", "JPY")).strip() or "JPY"
 
-    # 価格表示
+    # ラベル組み立て
+    parts: list[str] = [name]
+    if show_code:
+        parts.append(code)
     if not price.ok or price.current_price is None:
-        price_html = "<span style='color:#9ca3af;'>取得失敗</span>"
-        chg_html = ""
+        parts.append("取得失敗")
     else:
-        price_html = fmt_price(price.current_price, currency)
+        parts.append(fmt_price(price.current_price, currency))
         if price.change_pct is None:
-            chg_html = "<span style='color:#6b7280;'>-</span>"
+            parts.append("-")
         else:
             sign = "+" if price.change_pct >= 0 else ""
             if price.change_pct > 0.0001:
-                color, mark = "#2563eb", "🔵"
+                mark = "🔵"
             elif price.change_pct < -0.0001:
-                color, mark = "#dc2626", "🔴"
+                mark = "🔴"
             else:
-                color, mark = "#6b7280", "⚪"
-            chg_html = f"<span style='color:{color};'>{mark} {sign}{price.change_pct:.2f}%</span>"
+                mark = "⚪"
+            parts.append(f"{mark} {sign}{price.change_pct:.2f}%")
+        if price.source == "manual":
+            parts.append("※ 手動値")
+    label = "\n".join(parts)
 
-    # 手動値の場合は「手動値」と小さく表示
-    src_html = ""
-    if price.ok and price.source == "manual":
-        src_html = "<div class='tile-src'>※ 手動値</div>"
+    is_selected = st.session_state.get("selected_home_code") == code
+    btn_type = "primary" if is_selected else "secondary"
 
-    html = (
-        f"<div class='tile-card'>"
-        f"<div class='tile-name'>{name}</div>"
-        f"<div class='tile-code'>{code}</div>"
-        f"<div class='tile-price'>{price_html}</div>"
-        f"<div class='tile-chg'>{chg_html}</div>"
-        f"{src_html}"
-        f"</div>"
-    )
-    st.markdown(html, unsafe_allow_html=True)
-    if st.button("📊 チャート", key=f"{key_prefix}_{code}", use_container_width=True):
+    if st.button(
+        label,
+        key=f"{key_prefix}_{code}",
+        use_container_width=True,
+        type=btn_type,
+    ):
         st.session_state["selected_home_code"] = code
+        st.rerun()
 
 
 def _home_header_text(row: pd.Series, price: PriceData) -> str:
@@ -682,12 +712,13 @@ def render_home_expander(row: pd.Series, price: PriceData) -> None:
 
 
 def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceData],
-                        columns_per_row: int = 4, key_prefix: str = "tile") -> None:
-    """Home用セクション: タイトル + 銘柄タイル (st.columns でグリッド表示)。
+                        key_prefix: str = "tile") -> None:
+    """Home用セクション: タイトル + 銘柄タイル (CSS grid auto-fit でレスポンシブ)。
 
-    - PCでは columns_per_row 個ずつ横に並ぶ (デフォルト4列)
-    - スマホでは CSS で 2列固定 (狭幅画面で 1列に潰れるのを防ぐ)
-    - 各タイルの「📊 チャート」ボタン押下で session_state に銘柄コードを保存・Home下部にチャート表示
+    - st.columns(N) を呼ぶが、CSS で `display: grid; grid-template-columns: auto-fit;`
+      に上書きするため、実際の列数は画面幅で自動決定される
+    - スマホ (≤640px): 105px幅で折り返し (2-3列)
+    - PC (≥641px): 140px幅で折り返し (4-6列)
     """
     st.markdown(f"#### {title} ({len(sub)})")
     if sub.empty:
@@ -695,15 +726,16 @@ def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceDa
         return
 
     rows = list(sub.iterrows())
-    n = max(1, int(columns_per_row))
-    for i in range(0, len(rows), n):
-        chunk = rows[i:i + n]
-        cols = st.columns(n)
-        for j, (_, row) in enumerate(chunk):
-            code = str(row.get("code", "")).strip()
-            price = prices.get(code, PriceData(symbol=code, error="未取得"))
-            with cols[j]:
-                render_home_tile(row, price, key_prefix=key_prefix)
+    # CSS grid auto-fit を効かせるため、行内に全銘柄を入れる
+    # st.columns(N) で N個のカラムを作成 (N=銘柄数・少数なら問題ない)
+    if not rows:
+        return
+    cols = st.columns(len(rows))
+    for col_idx, (_, row) in enumerate(rows):
+        code = str(row.get("code", "")).strip()
+        price = prices.get(code, PriceData(symbol=code, error="未取得"))
+        with cols[col_idx]:
+            render_home_tile(row, price, key_prefix=key_prefix, show_code=False)
 
 
 # =============================================================================
@@ -779,20 +811,9 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     - 表の行クリックで下部にチャート表示 (1時間足/日足/週足切替)
     """
     st.markdown("### 🏠 Home  — 銘柄一覧")
-    st.caption("タイルの「📊 チャート」ボタンを押すと、画面下に選択中銘柄のチャートが表示されます。")
+    st.caption("銘柄カードをタップで選択 → 画面下に選択中銘柄のチャートが表示されます。列数は画面幅で自動調整 (スマホ2-3列・PC4-6列)。")
 
-    # PC列数選択 (スマホはCSSで強制2列)
-    n_cols = st.radio(
-        "PC列数",
-        [2, 3, 4, 5, 6],
-        index=2,  # default 4列
-        horizontal=True,
-        format_func=lambda x: f"{x}列",
-        key="home_tile_cols",
-        help="スマホ表示時はCSSで2列固定。PC表示時のみこの設定が反映されます。",
-    )
-
-    # 保有・Watch のタイル一覧
+    # 保有・Watch のタイル一覧 (列数はCSS gridでauto-fit)
     visible = watch_df[(watch_df["is_active"] == 1) & (watch_df["group"] != GROUP_EXCLUDED)]
 
     for group_name in (GROUP_HOLD, GROUP_WATCH):
@@ -801,7 +822,7 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
             continue
         label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
         key_prefix = "hold" if group_name == GROUP_HOLD else "watch"
-        render_home_section(label, sub, prices, columns_per_row=int(n_cols), key_prefix=key_prefix)
+        render_home_section(label, sub, prices, key_prefix=key_prefix)
         st.markdown("")  # 軽い余白
 
     # ----- 選択中チャート (Home下部) -----
