@@ -601,31 +601,188 @@ def render_home_expander(row: pd.Series, price: PriceData) -> None:
         link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(code, market)})")
 
 
-def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceData],
-                        columns_per_row: int = 4) -> None:
-    """Home用セクション: タイトル + 銘柄タイル (st.columns でグリッド表示)。
+def inject_home_css() -> None:
+    """Home専用 CSS を注入する。
 
-    - PCでは columns_per_row 個ずつ横に並ぶ (デフォルト4列)
-    - スマホでは Streamlit のレスポンシブ動作で自動的に1列縦並びに切り替わる
-    - 各タイルは st.expander で、開くとチャートが表示される
+    重要:
+    - グローバルCSS (div[data-testid="stHorizontalBlock"] や .stButton 全体) は当てない
+    - block-container 全体のpadding/marginにもCSSを当てない (Streamlit標準のまま)
+    - 当てるのは .home-tile-grid / .home-tile / .home-tile-* スコープのみ
+    - これにより Portfolio / Settings タブが一切影響を受けない
     """
-    st.markdown(f"#### {title} ({len(sub)})")
+    st.markdown(
+        """
+        <style>
+        /* ===== Home タイルグリッド (このクラス配下にしか影響しない) ===== */
+        .home-tile-grid {
+            display: grid;
+            gap: 8px;
+            margin: 4px 0 12px 0;
+        }
+        /* PC: auto-fit で 140-180px のタイルを4〜6列敷き詰め */
+        @media (min-width: 641px) {
+            .home-tile-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 8px;
+            }
+        }
+        /* スマホ: 3列固定 (361-640px) */
+        @media (min-width: 361px) and (max-width: 640px) {
+            .home-tile-grid {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 4px;
+            }
+        }
+        /* 小型スマホ: 2列 */
+        @media (max-width: 360px) {
+            .home-tile-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 3px;
+            }
+        }
+        .home-tile {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 76px;
+            padding: 8px 10px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #ffffff;
+            text-decoration: none !important;
+            color: inherit !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+            transition: box-shadow 0.15s, border-color 0.15s;
+            overflow: hidden;
+        }
+        .home-tile:hover {
+            border-color: #1f77b4;
+            box-shadow: 0 2px 6px rgba(31,119,180,0.18);
+        }
+        .home-tile.selected {
+            border-color: #1f77b4;
+            background: #eff6ff;
+            box-shadow: 0 2px 6px rgba(31,119,180,0.25);
+        }
+        .home-tile-name {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #1c1e21;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .home-tile-price {
+            font-size: 1.0rem;
+            font-weight: 700;
+            color: #1c1e21;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .home-tile-pct {
+            font-size: 0.85rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .home-tile-pct.up   { color: #2563eb; }  /* 青 */
+        .home-tile-pct.down { color: #dc2626; }  /* 赤 */
+        .home-tile-pct.flat { color: #6b7280; }  /* グレー */
+        .home-tile-pct.err  { color: #9ca3af; font-weight: 500; font-size: 0.75rem; }
+        .home-section-title {
+            margin: 6px 0 4px 0;
+            font-size: 1.0rem;
+            font-weight: 700;
+            color: #1c1e21;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _short_display_name(name: str, max_len: int = 8) -> str:
+    """タイル用に銘柄名を短縮 (PCタイルが狭いとき用)。"""
+    s = (name or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
+def _tile_card_html(code: str, name: str, price: PriceData, currency: str,
+                    selected_code: Optional[str]) -> str:
+    """1銘柄分のHTMLタイルを生成する (a要素・query paramでクリック検知)。
+
+    HTMLエスケープしたうえで .home-tile スコープのCSSのみに依存させる。
+    """
+    import html as _html
+
+    code_safe = _html.escape(str(code))
+    name_short = _short_display_name(name, max_len=8)
+    name_safe = _html.escape(name_short)
+
+    if not price.ok or price.current_price is None:
+        price_text = "取得失敗"
+        pct_html = '<div class="home-tile-pct err">—</div>'
+    else:
+        price_text = fmt_price(price.current_price, currency)
+        if price.change_pct is None:
+            pct_html = '<div class="home-tile-pct flat">—</div>'
+        else:
+            sign = "+" if price.change_pct >= 0 else ""
+            if price.change_pct > 0.0001:
+                cls = "up"
+            elif price.change_pct < -0.0001:
+                cls = "down"
+            else:
+                cls = "flat"
+            pct_html = (
+                f'<div class="home-tile-pct {cls}">'
+                f'{_html.escape(sign)}{price.change_pct:.2f}%</div>'
+            )
+    price_safe = _html.escape(price_text)
+
+    selected_cls = " selected" if (selected_code and selected_code == code) else ""
+    # 同じ銘柄を再クリックで選択解除 (?select=)
+    target = "" if (selected_code and selected_code == code) else code_safe
+    href = f"?select={target}"
+
+    return (
+        f'<a class="home-tile{selected_cls}" href="{href}" target="_self" '
+        f'title="{name_safe} ({code_safe})">'
+        f'<div class="home-tile-name">{name_safe}</div>'
+        f'<div class="home-tile-price">{price_safe}</div>'
+        f'{pct_html}'
+        f'</a>'
+    )
+
+
+def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceData],
+                        selected_code: Optional[str] = None) -> None:
+    """Home用セクション: タイトル + HTMLタイルグリッド (.home-tile-grid スコープ)。
+
+    - タイル数・列数は CSS の auto-fit / @media で自動調整
+    - グローバルCSSは一切当てない (Portfolio/Settings に影響しない)
+    - タイルクリック → ?select={code} クエリパラメータで選択検知
+    """
+    st.markdown(
+        f'<div class="home-section-title">{title} ({len(sub)})</div>',
+        unsafe_allow_html=True,
+    )
     if sub.empty:
         st.caption("(対象なし)")
         return
 
-    rows = list(sub.iterrows())
-    n = max(1, int(columns_per_row))
-    # n 個ずつのチャンクに分割して横並びに表示
-    for i in range(0, len(rows), n):
-        chunk = rows[i:i + n]
-        cols = st.columns(n)
-        for j, (_, row) in enumerate(chunk):
-            code = str(row.get("code", "")).strip()
-            price = prices.get(code, PriceData(symbol=code, error="未取得"))
-            with cols[j]:
-                render_home_expander(row, price)
-        # 余ったカラムは空のまま (高さ揃え)
+    tiles_html = []
+    for _, row in sub.iterrows():
+        code = str(row.get("code", "")).strip()
+        name = str(row.get("name", "")).strip() or code
+        currency = str(row.get("currency", "JPY")).strip().upper() or "JPY"
+        price = prices.get(code, PriceData(symbol=code, error="未取得"))
+        tiles_html.append(_tile_card_html(code, name, price, currency, selected_code))
+
+    html = '<div class="home-tile-grid">' + "".join(tiles_html) + "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -692,35 +849,89 @@ def render_card(row: pd.Series, price: PriceData, position_row: Optional[pd.Seri
 # =============================================================================
 
 def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    """Home: 銘柄名・コード・現在価格・前日騰落率のみコンパクト一覧。
+    """Home: 世界の株価風タイルグリッド (.home-tile-grid スコープ)。
 
-    - 上から 保有 → Watch の順 (別枠は廃止し統合済)
-    - 除外グループは表示しない
-    - チャート・評価額・保有株数・詳細リンクは表示しない (各タブで確認)
-    - st.dataframe ベース実装 (HTML文字列描画はしない)
-    - 表の行クリックで下部にチャート表示 (1時間足/日足/週足切替)
+    - 保有銘柄 → Watch銘柄 の順でタイル表示
+    - 各タイル: 銘柄名 / 現在価格 / 前日騰落率 (青/赤/グレー)
+    - 1687 ETF は yfinance fallback → manual_prices.csv で価格表示
+    - 取得失敗があっても画面トップに大きな警告は出さない (タイル内に小さく "取得失敗")
+    - タイルクリック → ?select={code} で下部に1時間足/日足/週足チャート表示
     """
-    st.markdown("### 🏠 Home  — 銘柄一覧")
-    st.caption("タイル状に並ぶ各銘柄をタップ/クリックで展開するとチャートが表示されます。閉じればチャートも隠れます。")
+    # クエリパラメータから選択中銘柄を取得
+    try:
+        selected_code = st.query_params.get("select")
+        if isinstance(selected_code, list):
+            selected_code = selected_code[0] if selected_code else None
+        if selected_code == "":
+            selected_code = None
+    except Exception:
+        selected_code = None
 
-    # 列数選択 (PC4-6列・スマホ1-2列)・スマホは自動で縦並びになる
-    n_cols = st.radio(
-        "列数",
-        [1, 2, 3, 4, 5, 6],
-        index=3,  # default 4列
-        horizontal=True,
-        format_func=lambda x: f"{x}列",
-        key="home_tile_cols",
-        help="PCは4-5列推奨・スマホは1-2列推奨 (狭幅画面ではStreamlitが自動的に縦並びに調整します)",
-    )
-
+    # 大きなタイトル・長い説明文は廃止 (上部はタイルに譲る)
     for group_name in (GROUP_HOLD, GROUP_WATCH):
         sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
         if sub.empty:
             continue
         label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
-        render_home_section(label, sub, prices, columns_per_row=int(n_cols))
-        st.markdown("")  # 軽い余白
+        render_home_section(label, sub, prices, selected_code=selected_code)
+
+    # 下部: 選択中銘柄のチャート (クリックされたとき以外は表示しない)
+    if selected_code:
+        sel_row_df = watch_df[watch_df["code"].astype(str) == str(selected_code)]
+        if not sel_row_df.empty:
+            sel_row = sel_row_df.iloc[0]
+            sel_code = str(sel_row.get("code", "")).strip()
+            sel_name = str(sel_row.get("name", "")).strip() or sel_code
+            sel_market = str(sel_row.get("market", "JP")).strip().upper() or "JP"
+            sel_currency = str(sel_row.get("currency", "JPY")).strip().upper() or "JPY"
+            sel_price = prices.get(sel_code, PriceData(symbol=sel_code, error="未取得"))
+
+            st.markdown("---")
+            top_l, top_r = st.columns([6, 1])
+            with top_l:
+                if sel_price.ok and sel_price.current_price is not None:
+                    cur_text = fmt_price(sel_price.current_price, sel_currency)
+                    if sel_price.change_pct is None:
+                        st.markdown(
+                            f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
+                            f"<span style='color:#6b7280; font-weight:600;'>—</span>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        sign = "+" if sel_price.change_pct >= 0 else ""
+                        if sel_price.change_pct > 0.0001:
+                            color = "#2563eb"
+                        elif sel_price.change_pct < -0.0001:
+                            color = "#dc2626"
+                        else:
+                            color = "#6b7280"
+                        st.markdown(
+                            f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
+                            f"<span style='color:{color}; font-weight:700;'>"
+                            f"{sign}{sel_price.change_pct:.2f}%</span>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption(f"{sel_name} ({sel_code}) — 価格情報の取得に失敗しました")
+            with top_r:
+                st.markdown(
+                    '<a href="?select=" target="_self" '
+                    'style="text-decoration:none; color:#6b7280;">✕ 閉じる</a>',
+                    unsafe_allow_html=True,
+                )
+
+            render_interval_chart(
+                code=sel_code,
+                market=sel_market,
+                name=sel_name,
+                currency=sel_currency,
+                interval_label="1時間足",
+                key_prefix=f"home_sel_{sel_code}",
+                height=340,
+            )
+            link_cols = st.columns(2)
+            link_cols[0].markdown(f"[📊 Yahoo]({yahoo_link(sel_code, sel_market)})")
+            link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(sel_code, sel_market)})")
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
@@ -1633,16 +1844,19 @@ def schedule_autorefresh(interval_sec: int) -> None:
 # =============================================================================
 
 def main() -> None:
-    # ヘッダー
-    header_cols = st.columns([4, 2, 2])
+    # Home専用CSSを注入 (.home-tile-grid / .home-tile スコープのみ・グローバルCSSは当てない)
+    inject_home_css()
+
+    # ヘッダー (タイトルはh4で少しだけコンパクトに・更新ボタン/自動更新は通常サイズ)
+    header_cols = st.columns([5, 2, 2])
     with header_cols[0]:
-        st.title("📈 Aさん株価ボード")
+        st.markdown("#### 📈 Aさん株価ボード")
         st.caption("📡 株価データは yfinance 取得のため **遅延/準リアルタイム** です")
     with header_cols[1]:
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
             fetch_one.clear()  # キャッシュクリア
+            fetch_history_cached.clear()
             st.rerun()
-        st.caption(f"最終更新: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     with header_cols[2]:
         interval = st.selectbox("自動更新", ["なし", "60秒", "180秒", "300秒"], index=0)
 
@@ -1663,10 +1877,8 @@ def main() -> None:
     with st.spinner("価格データ取得中..."):
         prices = fetch_all(visible, period="6mo", provider_name="yfinance")
 
-    # 取得失敗の集計
-    failed = [c for c, p in prices.items() if not p.ok]
-    if failed:
-        st.warning(f"⚠️ {len(failed)} 銘柄の取得に失敗しました: {', '.join(failed[:10])}{' ...' if len(failed)>10 else ''}")
+    # 取得失敗があってもHome画面トップに大きな警告は出さない (各タイル内に「取得失敗」と小さく表示する)。
+    # デバッグ用にcaptionのみ。
 
     # タブ (Chartsタブ廃止・チャートはHomeのexpander内で確認)
     tabs = st.tabs(["🏠 Home", "💼 Portfolio", "⚙️ Settings"])

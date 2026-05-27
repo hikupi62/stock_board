@@ -20,7 +20,9 @@ C:\stocks\app\stock_board\
 ├── price_provider.py               # Provider 抽象化 (yfinance初期実装)
 ├── data/
 │   ├── watchlist.csv               # 表示対象銘柄リスト
-│   └── positions.csv               # 保有株数・取得単価 (Cloud対応・優先読み込み)
+│   ├── positions.csv               # 保有株数・取得単価 (Cloud対応・優先読み込み)
+│   ├── jpx_listed_companies.csv    # 日本語銘柄名マスタ
+│   └── manual_prices.csv           # 取得失敗時の手動価格 (1687 ETF等の最終fallback)
 ├── requirements.txt
 ├── README.md
 ├── .gitignore
@@ -222,11 +224,11 @@ code,name,shares,avg_price,currency,note
 
 | タブ | 内容 |
 |---|---|
-| 🏠 Home | 銘柄ごとの **expander 形式**。見出しに 銘柄名・コード・価格・🔵/🔴/⚪+騰落率。開くと色付き騰落率 + **1時間足/日足/週足切替チャート** + Yahoo/TradingView リンク |
-| 💼 Portfolio | 保有銘柄一覧・株数・平均取得単価・評価額・評価損益・損益率 (色付き) |
+| 🏠 Home | **世界の株価風タイルグリッド**。保有銘柄 / Watch銘柄をそれぞれ小さなタイルで一覧。各タイル= 銘柄名 / 現在価格 / 騰落率 (青/赤/グレー)。タイルクリックで下部に **1時間足/日足/週足切替チャート** |
+| 💼 Portfolio | 保有銘柄一覧 + **並び替えselectbox (10種)** + 表下に評価額/評価損益/評価損益率の3列メトリクス |
 | ⚙️ Settings | **銘柄管理フォーム (追加・削除・移動)** + 詳細CSV編集 (折りたたみ) |
 
-> **Chartsタブは廃止**。チャートは Home の各銘柄 expander を開いて確認します。
+> **Chartsタブは廃止**。チャートは Home タイルをクリックして確認します。
 > Separateタブ・Watchタブは廃止のまま (Watch銘柄は Home の「Watch銘柄」セクションに表示)。
 > 「別枠」グループも廃止: 1687/1695 は **保有** / MSTR/WDC/STX は **Watch** に統合済。
 
@@ -238,23 +240,34 @@ code,name,shares,avg_price,currency,note
 | **Watch** | 日本株Watch銘柄 + MSTR / WDC / STX (米国株サテライト) |
 | **除外** | 6326 クボタ (売却済) / 285A キオクシア / 6702 富士通 (父保有分) — 通常表示しない |
 
-### Home画面の表示仕様 (タイルグリッド形式)
-- 各セクション (保有銘柄 / Watch銘柄) を **タイルグリッド** で表示
-- 1銘柄 = 1タイル = `st.expander` (枠付きボックス)
-- 画面上部の **列数ラジオ** で 1〜6列を切替可能 (デフォルト 4列)
-  - PC推奨: 4-5列
-  - スマホ推奨: 1-2列 (狭幅画面ではStreamlitが自動的に縦並びに調整)
-- **タイル見出し** (1行):
-  - 銘柄名 ・ コード ・ 現在価格 ・ **🔵 (+x.xx%) / 🔴 (-x.xx%) / ⚪ (0.00%)**
-  - Streamlit expander の見出しはプレーンテキスト扱いで色CSSが効かないため、色の代わりに絵文字マーカーを使用
-- **タイルを開くと**:
-  - 上部に色付き Markdown で `現在値 ¥xxx 　 前日騰落率 +x.xx%` (プラス青/マイナス赤/ゼロ灰)
-  - その下に **1時間足/日足/週足 切替チャート** (初期=1時間足)
-  - Yahoo / TradingView 外部リンク
-- タイルを閉じればチャートも隠れる (チャート取得は開いたときだけ・キャッシュ180秒)
-- 取得失敗銘柄は見出しに「取得失敗」と表示し、他銘柄は継続表示
-- HTMLは limit 使用 (span1つだけ・サニタイズ低リスク)
-- チャートは Home のタイルを開いて確認します (専用Chartsタブは廃止)
+### Home画面の表示仕様 (世界の株価風タイル + Home専用スコープCSS)
+
+**タイル構成**
+- 各セクション (保有銘柄 / Watch銘柄) を **HTMLタイルグリッド** で表示 (`<div class="home-tile-grid">`)
+- 各タイル = `<a class="home-tile">` (HTMLエスケープ済 + `unsafe_allow_html=True` で1回だけ描画)
+- タイル内容: **銘柄名 / 現在価格 / 前日騰落率** (青/赤/グレー)
+- PC: `auto-fit, minmax(150px, 1fr)` で画面幅に応じて 4〜6列敷き詰め
+- スマホ (361-640px): 3列固定
+- 小型スマホ (≤360px): 2列
+- 各タイル: min-height 76px・padding 8px 10px・1px ボーダー + hover で青強調
+- タイル外枠が縦文字に崩れないよう `white-space: nowrap` + `text-overflow: ellipsis`
+
+**タイルクリック動作**
+- タイル = `<a href="?select={code}">` で、クリックすると URL query parameter `select` がセットされる
+- `st.query_params.get("select")` を Python 側で検知 → 下部に該当銘柄のチャート表示
+- チャート: 1時間足 / 日足 / 週足 切替 (初期=1時間足) + Yahoo / TradingView 外部リンク
+- 同じタイルを再クリックで選択解除 (`?select=`)・「✕ 閉じる」リンクでも解除
+- チャート取得はクリックされたときだけ (キャッシュ180秒)
+
+**CSSスコープ (PC崩壊防止)**
+- 当てるCSSは `.home-tile-grid` / `.home-tile` / `.home-tile-name` / `.home-tile-price` / `.home-tile-pct` / `.home-section-title` の **Home専用クラスのみ**
+- グローバルな `div[data-testid="stHorizontalBlock"]` / `.stButton > button` / `.stApp .block-container` には **CSSを一切当てない**
+- これにより Portfolio タブ・Settings タブのレイアウトは **Streamlit標準のまま** → 過去のPC崩壊事故を防ぐ
+- ヘッダーは `st.markdown("#### 📈 Aさん株価ボード")` (h4) で少しだけコンパクト・手動更新ボタン/自動更新selectboxは標準サイズ
+
+**取得失敗の扱い**
+- 1687 など低流動性ETFの取得失敗は **個別タイル内に小さく「取得失敗」**と表示するだけ (画面上部に大きな黄色警告は出さない)
+- `price_provider.py` の6段fallback (history → 5d → fast_info → info → manual → fail) で多くの場合は `data/manual_prices.csv` で救済される
 
 ### チャートの足種
 - **1時間足**: yfinance `interval=60m, period=60d` (**初期表示**) — 日本株では取得不可・欠損のケースあり (取得不可時は警告表示・日足/週足への切替を推奨)
@@ -312,6 +325,11 @@ code,name,market,sector,note
 3. **板情報・約定情報・証券口座情報は取れない**
 4. **ファンダメンタル情報は使わない** (価格・出来高のみ・本アプリ方針)
 5. **価格誤差はあり得る** (最終判断は証券会社の正式画面で)
+6. **1687 WTアグリETF など低流動性銘柄は yfinance の `history` がしばしば空になる** ため、`price_provider.py` で6段fallbackを実装:
+   - `history(period, interval)` → `history(period="5d", interval="1d")` → `fast_info` → `info` → **`data/manual_prices.csv` (手動値・最終手段)** → 取得失敗
+   - `data/manual_prices.csv` の列: `code,name,price,previous_close,currency,updated_at,note`
+   - 手動値が使われた場合 `PriceData.source = "manual"` がセットされる (画面上は通常価格と同じ見た目)
+   - 1687 等で yfinance が安定して取れる日も多いため、manual は **fallback時のみ**使われる
 
 ## 🛠️ 将来の改善計画
 
