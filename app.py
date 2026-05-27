@@ -885,6 +885,18 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
         st.info("ポジションCSVが読み込めませんでした。watchlist のみで起動中です。")
         return
 
+    # watchlist から short_name 逆引き辞書を作る (タイル表示用)
+    code_to_short: dict[str, str] = {}
+    try:
+        w = load_watchlist()
+        for _, r in w.iterrows():
+            c = str(r.get("code", "")).strip()
+            sn = str(r.get("short_name", "") or "").strip()
+            if c and sn:
+                code_to_short[c] = sn
+    except Exception:
+        code_to_short = {}
+
     # ----- 1) 内部行を構築 (数値+表示用文字列を併記) -----
     rows = []
     total_cost = 0.0
@@ -916,9 +928,13 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
             total_cost += avg_cost * shares
             has_any_avg_cost = True
 
+        # 表示用銘柄名: short_name (watchlist) → なければ name を6文字短縮
+        full_name = str(p.get("name", "")).strip()
+        disp_name = code_to_short.get(code) or (full_name[:6] if len(full_name) > 6 else full_name)
+
         rows.append({
             "コード": code,
-            "銘柄名": p.get("name", ""),
+            "銘柄名": disp_name,
             "株数": int(shares),
             "平均取得単価": avg_cost,  # 数値 or None
             "現在値": cur,              # 数値 or None
@@ -996,30 +1012,22 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
         return f"{sign}{v:.2f}%"
 
     df_internal["平均取得単価_disp"] = df_internal["平均取得単価"].apply(
-        lambda v: f"{v:,.1f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "未入力"
+        lambda v: f"{v:,.0f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "未入力"
     )
     df_internal["現在値_disp"] = df_internal["現在値"].apply(
-        lambda v: f"{v:,.1f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "-"
+        lambda v: f"{v:,.0f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "-"
     )
-    df_internal["評価額"] = df_internal["評価額_num"].apply(fmt_money_abs)
     df_internal["評価損益"] = df_internal["評価損益_num"].apply(fmt_money)
-    df_internal["評価損益率"] = df_internal["評価損益率_num"].apply(fmt_pct)
-    df_internal["前日比"] = df_internal["前日比_num"].apply(fmt_num1)
-    df_internal["前日比率"] = df_internal["前日比率_num"].apply(fmt_pct_simple)
 
-    # 表示列だけ抽出 (_num 系は表示しない)
-    display_cols = [
-        "コード", "銘柄名", "株数",
-        "平均取得単価_disp", "現在値_disp",
-        "評価額", "評価損益", "評価損益率", "前日比", "前日比率",
-    ]
+    # ----- 4) 表 (4列のみ: 銘柄名 / 取得単価 / 現在値 / 評価損益) -----
+    display_cols = ["銘柄名", "平均取得単価_disp", "現在値_disp", "評価損益"]
     df_display = df_internal[display_cols].rename(columns={
-        "平均取得単価_disp": "平均取得単価",
+        "平均取得単価_disp": "取得単価",
         "現在値_disp": "現在値",
     })
 
-    # ----- 4) 表 (損益・前日比系列に色付け) -----
-    pnl_cols = [c for c in ("評価損益", "評価損益率", "前日比", "前日比率") if c in df_display.columns]
+    # 評価損益列だけに色付け (プラス青 / マイナス赤 / ゼロ灰)
+    pnl_cols = ["評価損益"]
     styled_df = df_display
     ok_styled = False
     try:
@@ -1035,39 +1043,38 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
         ok_styled = False
 
     table_height = min(600, 35 * (len(df_display) + 1) + 8)
-    # keyを変えて古い列ヘッダーソート状態をリセット (上部の並び替えselectboxを正とする)
     st.dataframe(
         styled_df,
         use_container_width=True,
         hide_index=True,
         height=table_height,
-        key="portfolio_table_v3",
+        key="portfolio_table_v4",
     )
     if not ok_styled:
         st.warning("色付けに失敗しました (プレーン表示)")
 
-    # ----- 5) 合計メトリクスを表の下に配置 -----
+    # ----- 5) 合計メトリクスを表の下に縦並びで配置 (スマホで数字が潰れないように) -----
     total_value = float(df_internal["評価額_num"].sum(skipna=True))
     pnl_total = float(df_internal["評価損益_num"].sum(skipna=True)) if has_any_avg_cost else None
     pnl_pct_total: Optional[float] = None
     if has_any_avg_cost and total_cost > 0 and pnl_total is not None:
         pnl_pct_total = pnl_total / total_cost * 100
 
-    metric_cols = st.columns(3)
-    metric_cols[0].metric("日本株PF評価額合計", fmt_yen(total_value))
+    # st.columns を使わず縦並び (Home用CSS gridの影響を受けず、スマホで数字省略されない)
+    st.metric("日本株PF評価額合計", fmt_yen(total_value))
     if pnl_total is not None:
-        metric_cols[1].metric(
+        st.metric(
             "評価損益合計",
             fmt_yen(pnl_total),
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else None,
         )
-        metric_cols[2].metric(
+        st.metric(
             "評価損益率",
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else "-",
         )
     else:
-        metric_cols[1].metric("評価損益合計", "未入力")
-        metric_cols[2].metric("評価損益率", "未入力")
+        st.metric("評価損益合計", "未入力")
+        st.metric("評価損益率", "未入力")
     # ※ 表の下には合計メトリクスのみ・注意書きは置かない (READMEとSettingsに記載済)
 
 
