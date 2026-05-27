@@ -1,0 +1,30 @@
+group,code,name,market,currency,is_active,note
+保有,1687,WTアグリETF,JP,JPY,1,商品ETF
+保有,1695,WT小麦ETF,JP,JPY,1,商品ETF
+保有,2780,コメ兵HD,JP,JPY,1,中古品・追加停止
+保有,4633,サカタINX,JP,JPY,1,印刷インキ・現規模維持
+保有,5032,エニーカラー,JP,JPY,1,VTuber・追加停止
+保有,5857,ARE HD,JP,JPY,1,不動産系・押し目買い継続
+保有,6432,竹内製作所,JP,JPY,1,建機ニッチ・育成中
+保有,7864,フジシール,JP,JPY,1,シール・追加なし
+保有,8020,兼松,JP,JPY,1,商社・主力
+保有,8059,第一実業,JP,JPY,1,機械商社・反発確認後
+保有,8253,クレディセゾン,JP,JPY,1,ノンバンク・中核
+保有,8316,SMFG,JP,JPY,1,銀行主力・追加停止
+保有,8593,三菱HC,JP,JPY,1,リース・押し目のみ
+保有,8830,住友不動産,JP,JPY,1,不動産本命・押し目買い
+保有,9433,KDDI,JP,JPY,1,通信・守りCore
+Watch,3626,TIS,JP,JPY,1,IT・正式候補
+Watch,9960,東テク,JP,JPY,1,設備・正式候補本命
+Watch,4722,フューチャー,JP,JPY,1,IT・Watch
+Watch,1980,ダイダン,JP,JPY,1,設備・Watch
+Watch,7994,オカムラ,JP,JPY,1,オフィス家具・Watch
+Watch,6814,古野電気,JP,JPY,1,船舶レーダー・Watch
+Watch,4206,アイカ工業,JP,JPY,1,化成品・Watch
+Watch,6995,東海理化,JP,JPY,1,車載・Watch
+Watch,MSTR,MicroStrategy,US,USD,1,BTC proxy
+Watch,WDC,Western Digital,US,USD,1,HDD・米国株サテライト
+Watch,STX,Seagate Technology,US,USD,1,HDD・米国株サテライト
+除外,6326,クボタ,JP,JPY,0,売却済・完全除外
+除外,285A,キオクシア,JP,JPY,0,完全除外
+除外,6702,富士通,JP,JPY,0,父保有分のためAさんPF除外
