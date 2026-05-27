@@ -230,6 +230,17 @@ code,name,shares,avg_price,currency,note
 
 > 富士通 6702 は父保有分のため、CSVに含まれていても本アプリでは自動的に除外されます。
 
+## 🎨 共通仕様: コンパクトUI (株価チェック特化)
+
+- **上部ヘッダーをミニマル化**: 「📈 Aさん株価ボード (yfinance・遅延)」「🔄 更新」「自動更新」を1行に詰めた小型ヘッダー
+- **全タブのタイトルを h5 サイズ** (`##### Portfolio` 等) に統一
+- **block-container の余白を縮小**: padding-top 0.5rem / padding-bottom 0.8rem / max-width 100%
+- **見出しの margin** を 0.3〜0.4rem に詰め
+- **タブ下余白・caption 上下余白** も詰め
+- **フッターの長文注意書きは削除** (画面密度優先)
+- Settings は管理画面なので長い説明文を expander 内に格納
+- Streamlit toolbar も `toolbarMode = "minimal"` で最小化
+
 ## 🎨 画面構成 (3タブ)
 
 | タブ | 内容 |
@@ -249,6 +260,13 @@ code,name,shares,avg_price,currency,note
 | **保有** | 日本株保有銘柄 + 1687 WTアグリETF + 1695 WT小麦ETF |
 | **Watch** | 日本株Watch銘柄 + MSTR / WDC / STX (米国株サテライト) |
 | **除外** | 6326 クボタ (売却済) / 285A キオクシア / 6702 富士通 (父保有分) — 通常表示しない |
+
+### Home実装のスコープ化 (PC画面崩れ対策)
+
+- グローバル `div[data-testid="stHorizontalBlock"]` への CSS は当てない (ヘッダー / Portfolio / Settings 全タブの `st.columns` 構造に波及するため)
+- Home のタイルは **`.home-tile-grid` クラス内のHTMLカード** で描画し、CSS をこのスコープ内に限定
+- クリック検知は `<a href="?select={code}">` リンク → `st.query_params['select']` を main() で検知 → `selected_home_code` を更新
+- これにより PC でヘッダー・Portfolio・Settings の列レイアウトが壊れない
 
 ### Home画面の表示仕様 (世界の株価風・密度高めタイル)
 - 各セクション (保有銘柄 / Watch銘柄) を **小型カードタイル** で敷き詰め表示

@@ -528,75 +528,100 @@ def _build_home_rows(sub: pd.DataFrame, prices: dict[str, PriceData]) -> pd.Data
 
 
 def inject_global_css() -> None:
-    """Home画面の世界の株価風タイルレイアウト用CSS。
+    """全体の余白詰め + Homeタイル(.home-tile-grid)専用CSS。
 
-    - スマホ: 3列固定 (小型画面≤360pxは2列)
-    - PC: auto-fit (140px minimum で4-6列)
-    - タイル高さ72px・余白詰め・銘柄名は1行省略
+    重要: グローバルな `stHorizontalBlock` / `stButton` への CSS は当てない。
+    Home のタイルは `.home-tile-grid` クラスでスコープ化し、ヘッダー/Portfolio/Settings に
+    影響しないようにする。
     """
     st.markdown(
         """
 <style>
-/* 小型スマホ (≤360px): 2列 */
-@media (max-width: 360px) {
-    div[data-testid="stHorizontalBlock"] {
-        display: grid !important;
-        grid-template-columns: repeat(2, 1fr) !important;
-        gap: 3px !important;
-    }
-}
-/* スマホ (361-640px): 3列固定 */
-@media (min-width: 361px) and (max-width: 640px) {
-    div[data-testid="stHorizontalBlock"] {
-        display: grid !important;
-        grid-template-columns: repeat(3, 1fr) !important;
-        gap: 3px !important;
-    }
-}
-/* PC (≥641px): auto-fit (4-6列) */
-@media (min-width: 641px) {
-    div[data-testid="stHorizontalBlock"] {
-        display: grid !important;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
-        gap: 6px !important;
-    }
-}
-div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-    width: 100% !important;
+/* ===== 全体: 上部・下部余白を詰める (PC/スマホ共通) ===== */
+.stApp .block-container {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.8rem !important;
+    padding-left: 0.8rem !important;
+    padding-right: 0.8rem !important;
     max-width: 100% !important;
-    min-width: 0 !important;
 }
-/* st.button を密度高めのカードタイルに */
-div[data-testid="stHorizontalBlock"] .stButton > button {
-    height: 72px !important;
-    min-height: 72px !important;
-    width: 100% !important;
-    padding: 4px 3px !important;
-    line-height: 1.2 !important;
-    white-space: pre-line !important;
-    word-break: keep-all !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    text-align: center !important;
-    border: 1px solid #e5e7eb !important;
-    background: #ffffff !important;
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+    margin-top: 0.3rem !important;
+    margin-bottom: 0.4rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
+    margin-bottom: 0.3rem !important;
+}
+.stApp [data-testid="stCaptionContainer"] {
+    margin-top: 0 !important;
+    margin-bottom: 0.2rem !important;
+}
+
+/* ===== Home専用タイルグリッド (.home-tile-grid スコープ) ===== */
+.home-tile-grid {
+    display: grid;
+    gap: 6px;
+    margin: 2px 0 8px 0;
+}
+@media (max-width: 360px) {
+    .home-tile-grid { grid-template-columns: repeat(2, 1fr); gap: 3px; }
+}
+@media (min-width: 361px) and (max-width: 640px) {
+    .home-tile-grid { grid-template-columns: repeat(3, 1fr); gap: 3px; }
+}
+@media (min-width: 641px) {
+    .home-tile-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px; }
+}
+.home-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none !important;
     color: #1f2937 !important;
-    font-weight: 500 !important;
-    font-size: 0.78rem !important;
-    border-radius: 6px !important;
-    box-shadow: 0 1px 1px rgba(0,0,0,0.03) !important;
+    height: 76px;
+    padding: 5px 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
+    text-align: center;
+    overflow: hidden;
+    cursor: pointer;
 }
-div[data-testid="stHorizontalBlock"] .stButton > button:hover {
-    background: #f3f4f6 !important;
-    border-color: #9ca3af !important;
+.home-tile:hover {
+    background: #f3f4f6;
+    border-color: #9ca3af;
 }
-/* 選択中タイル (primary) */
-div[data-testid="stHorizontalBlock"] .stButton > button[kind="primary"] {
-    border-color: #2563eb !important;
-    background: #eff6ff !important;
-    color: #1f2937 !important;
+.home-tile.selected {
+    border-color: #2563eb;
+    background: #eff6ff;
 }
-/* Home の小見出し (保有銘柄 / Watch銘柄) を縮小 */
+.home-tile-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.home-tile-price {
+    font-size: 0.92rem;
+    font-weight: 700;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
+.home-tile-chg {
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-top: 1px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
 .home-section-title {
     font-size: 0.95rem;
     font-weight: 700;
@@ -625,47 +650,38 @@ def _short_display_name(row: pd.Series, max_len: int = 6) -> str:
     return full
 
 
-def render_home_tile(row: pd.Series, price: PriceData, key_prefix: str, show_code: bool = False) -> None:
-    """1銘柄=1タイル (3行固定: 銘柄名 / 価格 / 騰落率)。
-
-    タイル自体が st.button・タップでチャート選択。CSSでカード化。
-    銘柄名は short_name 優先、なければ最大6文字に短縮 (1行表示)。
-    """
+def _tile_card_html(row: pd.Series, price: PriceData, selected: bool) -> str:
+    """1銘柄分のHTMLカード文字列を返す。クリックでクエリパラメータ更新。"""
     code = str(row.get("code", "")).strip()
     currency = str(row.get("currency", "JPY")).strip() or "JPY"
     display_name = _short_display_name(row, max_len=6)
 
-    # 3行固定構成: 銘柄名 / 価格 / 騰落率
-    parts: list[str] = [display_name]
     if not price.ok or price.current_price is None:
-        parts.append("取得失敗")
-        parts.append("")
+        price_html = "<span style='color:#9ca3af;'>取得失敗</span>"
+        chg_html = ""
     else:
-        parts.append(fmt_price(price.current_price, currency))
+        price_html = fmt_price(price.current_price, currency)
         if price.change_pct is None:
-            parts.append("-")
+            chg_html = "<span style='color:#6b7280;'>-</span>"
         else:
             sign = "+" if price.change_pct >= 0 else ""
             if price.change_pct > 0.0001:
-                mark = "🔵"
+                color, mark = "#2563eb", "🔵"
             elif price.change_pct < -0.0001:
-                mark = "🔴"
+                color, mark = "#dc2626", "🔴"
             else:
-                mark = "⚪"
-            parts.append(f"{mark} {sign}{price.change_pct:.2f}%")
-    label = "\n".join(parts)
+                color, mark = "#6b7280", "⚪"
+            chg_html = f"<span style='color:{color};'>{mark} {sign}{price.change_pct:.2f}%</span>"
 
-    is_selected = st.session_state.get("selected_home_code") == code
-    btn_type = "primary" if is_selected else "secondary"
-
-    if st.button(
-        label,
-        key=f"{key_prefix}_{code}",
-        use_container_width=True,
-        type=btn_type,
-    ):
-        st.session_state["selected_home_code"] = code
-        st.rerun()
+    sel_class = " selected" if selected else ""
+    # href にコードをクエリパラメータで埋め込み (Streamlit が rerun 時に検知)
+    return (
+        f'<a class="home-tile{sel_class}" href="?select={code}" target="_self">'
+        f'<div class="home-tile-name">{display_name}</div>'
+        f'<div class="home-tile-price">{price_html}</div>'
+        f'<div class="home-tile-chg">{chg_html}</div>'
+        f'</a>'
+    )
 
 
 def _home_header_text(row: pd.Series, price: PriceData) -> str:
@@ -748,8 +764,14 @@ def render_home_expander(row: pd.Series, price: PriceData) -> None:
 
 def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceData],
                         key_prefix: str = "tile") -> None:
-    """Home用セクション: 小見出し + 銘柄タイル (CSS grid で 3列/4-6列)。"""
-    # 小見出し (HTMLで縮小スタイル適用)
+    """Home用セクション: 小見出し + .home-tile-grid (HTMLカード+CSS grid)。
+
+    実装方針:
+      - st.columns は使わない (CSS波及を避ける)
+      - 全タイルを1つの <div class="home-tile-grid"> HTMLブロックで描画
+      - 各タイルは <a href="?select={code}"> で構成 → クリックでクエリパラメータ更新
+      - main() で `st.query_params['select']` を検知して selected_home_code を更新
+    """
     st.markdown(
         f"<div class='home-section-title'>{title} ({len(sub)})</div>",
         unsafe_allow_html=True,
@@ -758,15 +780,14 @@ def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceDa
         st.caption("(対象なし)")
         return
 
-    rows = list(sub.iterrows())
-    if not rows:
-        return
-    cols = st.columns(len(rows))
-    for col_idx, (_, row) in enumerate(rows):
+    selected = st.session_state.get("selected_home_code", "")
+    cards: list[str] = []
+    for _, row in sub.iterrows():
         code = str(row.get("code", "")).strip()
         price = prices.get(code, PriceData(symbol=code, error="未取得"))
-        with cols[col_idx]:
-            render_home_tile(row, price, key_prefix=key_prefix, show_code=False)
+        cards.append(_tile_card_html(row, price, selected=(code == selected)))
+    html = '<div class="home-tile-grid">' + "".join(cards) + "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -879,7 +900,7 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    st.markdown("### 💼 Portfolio")
+    st.markdown("##### 💼 Portfolio")
 
     if positions_df.empty:
         st.info("ポジションCSVが読み込めませんでした。watchlist のみで起動中です。")
@@ -1707,7 +1728,7 @@ def _positions_editor_section() -> None:
 
 
 def page_settings() -> None:
-    st.markdown("### ⚙️ Settings")
+    st.markdown("##### ⚙️ Settings")
 
     st.markdown("#### 表示グループ")
     cols = st.columns(2)
@@ -1808,19 +1829,42 @@ def schedule_autorefresh(interval_sec: int) -> None:
 # =============================================================================
 
 def main() -> None:
-    # スマホ2列固定・タイルスタイル等のCSSを最初に挿入
+    # 全体余白詰め + Homeタイル専用CSSを最初に挿入
     inject_global_css()
 
-    # ヘッダー (コンパクト化・スマホで上部スペースを節約)
-    header_cols = st.columns([5, 2, 2])
+    # クエリパラメータ ?select=XXXX を検知してタイル選択を更新
+    try:
+        sel = st.query_params.get("select")
+        if sel:
+            st.session_state["selected_home_code"] = str(sel)
+            # クリアして URL を綺麗に保つ (rerun ループ防止)
+            try:
+                del st.query_params["select"]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ヘッダー (PC/スマホ共通でコンパクト化)
+    header_cols = st.columns([6, 1.5, 1.5])
     with header_cols[0]:
-        st.markdown("##### 📈 Aさん株価ボード  <span style='color:#9ca3af; font-size:0.7rem;'>(yfinance・遅延)</span>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-size:0.95rem; font-weight:600; padding-top:6px;'>"
+            "📈 Aさん株価ボード "
+            "<span style='color:#9ca3af; font-size:0.7rem; font-weight:400;'>(yfinance・遅延)</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
     with header_cols[1]:
         if st.button("🔄 更新", type="primary", use_container_width=True):
-            fetch_one.clear()  # キャッシュクリア
+            fetch_one.clear()
+            fetch_history_cached.clear()
             st.rerun()
     with header_cols[2]:
-        interval = st.selectbox("自動更新", ["なし", "60秒", "180秒", "300秒"], index=0, label_visibility="collapsed")
+        interval = st.selectbox(
+            "自動更新", ["なし", "60秒", "180秒", "300秒"],
+            index=0, label_visibility="collapsed",
+        )
 
     interval_map = {"なし": 0, "60秒": 60, "180秒": 180, "300秒": 300}
     schedule_autorefresh(interval_map[interval])
@@ -1853,12 +1897,7 @@ def main() -> None:
     with tabs[2]:
         page_settings()
 
-    # フッター注意
-    st.markdown("---")
-    st.caption(
-        "🛡️ 本アプリは閲覧専用です。自動発注機能はありません。証券会社ログイン情報も保存しません。"
-        " 株価データは yfinance による遅延/準リアルタイム取得です。"
-    )
+    # フッター (省略・上部に既に「(yfinance・遅延)」を表示済)
 
 
 if __name__ == "__main__":
