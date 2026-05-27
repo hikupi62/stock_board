@@ -537,22 +537,37 @@ def inject_global_css() -> None:
     st.markdown(
         """
 <style>
-/* ===== 全体: 上部・下部余白を詰める (PC/スマホ共通) ===== */
-.stApp .block-container {
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.8rem !important;
-    padding-left: 0.8rem !important;
-    padding-right: 0.8rem !important;
-    max-width: 100% !important;
+/* ===== PC (≥641px): 標準的な余白を残してヘッダー/Portfolio/Settingsを見やすく ===== */
+@media (min-width: 641px) {
+    .stApp .block-container {
+        padding-top: 1.0rem !important;
+        padding-bottom: 1.0rem !important;
+        padding-left: 1.0rem !important;
+        padding-right: 1.0rem !important;
+        max-width: 100% !important;
+    }
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
 }
-.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
-    margin-top: 0.3rem !important;
-    margin-bottom: 0.4rem !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
+/* ===== スマホ (≤640px): 余白を詰めてHomeタイル優先 ===== */
+@media (max-width: 640px) {
+    .stApp .block-container {
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.8rem !important;
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
+        max-width: 100% !important;
+    }
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        margin-top: 0.3rem !important;
+        margin-bottom: 0.4rem !important;
+    }
 }
+/* タブ下の余白 (共通・控えめに詰める) */
 div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
-    margin-bottom: 0.3rem !important;
+    margin-bottom: 0.4rem !important;
 }
 .stApp [data-testid="stCaptionContainer"] {
     margin-top: 0 !important;
@@ -900,7 +915,7 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    st.markdown("##### 💼 Portfolio")
+    st.markdown("#### 💼 Portfolio")
 
     if positions_df.empty:
         st.info("ポジションCSVが読み込めませんでした。watchlist のみで起動中です。")
@@ -1081,21 +1096,23 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
     if has_any_avg_cost and total_cost > 0 and pnl_total is not None:
         pnl_pct_total = pnl_total / total_cost * 100
 
-    # st.columns を使わず縦並び (Home用CSS gridの影響を受けず、スマホで数字省略されない)
-    st.metric("日本株PF評価額合計", fmt_yen(total_value))
+    # PC では横3列・スマホでも Streamlit のレスポンシブで縦並びに自動切替
+    # (グローバル stHorizontalBlock CSS は削除済なので st.columns が正常動作)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("日本株PF評価額合計", fmt_yen(total_value))
     if pnl_total is not None:
-        st.metric(
+        m2.metric(
             "評価損益合計",
             fmt_yen(pnl_total),
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else None,
         )
-        st.metric(
+        m3.metric(
             "評価損益率",
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else "-",
         )
     else:
-        st.metric("評価損益合計", "未入力")
-        st.metric("評価損益率", "未入力")
+        m2.metric("評価損益合計", "未入力")
+        m3.metric("評価損益率", "未入力")
     # ※ 表の下には合計メトリクスのみ・注意書きは置かない (READMEとSettingsに記載済)
 
 
@@ -1728,7 +1745,7 @@ def _positions_editor_section() -> None:
 
 
 def page_settings() -> None:
-    st.markdown("##### ⚙️ Settings")
+    st.markdown("#### ⚙️ Settings")
 
     st.markdown("#### 表示グループ")
     cols = st.columns(2)
@@ -1845,25 +1862,21 @@ def main() -> None:
     except Exception:
         pass
 
-    # ヘッダー (PC/スマホ共通でコンパクト化)
-    header_cols = st.columns([6, 1.5, 1.5])
+    # ヘッダー (PCでは標準サイズ・スマホはCSS側で詰める)
+    header_cols = st.columns([5, 2, 2])
     with header_cols[0]:
-        st.markdown(
-            "<div style='font-size:0.95rem; font-weight:600; padding-top:6px;'>"
-            "📈 Aさん株価ボード "
-            "<span style='color:#9ca3af; font-size:0.7rem; font-weight:400;'>(yfinance・遅延)</span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("#### 📈 Aさん株価ボード")
+        st.caption("📡 株価データは yfinance 取得のため **遅延/準リアルタイム** です")
     with header_cols[1]:
-        if st.button("🔄 更新", type="primary", use_container_width=True):
+        st.write("")  # 縦位置を少し下げる
+        if st.button("🔄 手動更新", type="primary", use_container_width=True):
             fetch_one.clear()
             fetch_history_cached.clear()
             st.rerun()
     with header_cols[2]:
         interval = st.selectbox(
             "自動更新", ["なし", "60秒", "180秒", "300秒"],
-            index=0, label_visibility="collapsed",
+            index=0,
         )
 
     interval_map = {"なし": 0, "60秒": 60, "180秒": 180, "300秒": 300}

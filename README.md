@@ -128,7 +128,7 @@ code,name,shares,avg_price,currency,note
 - **初期並び順**: 評価損益_num **降順** (プラス大 → マイナス大の順)
 - **並び替えselectbox**: 評価損益/評価額/損益率/前日比率/コード/銘柄名の昇降順 (上部に配置)
 - **評価損益列の色**: プラス青 / マイナス赤 / ゼロ灰 (`_pct_color_style`)
-- **トータル**: 表の下に **3つの st.metric を縦並び** (st.columns 不使用・スマホで数字省略されない)
+- **トータル (表の下に必ず表示・PC横3列 / スマホは自動レスポンシブ)**:
   - 日本株PF評価額合計
   - 評価損益合計 (delta = 損益率)
   - 評価損益率
@@ -230,16 +230,19 @@ code,name,shares,avg_price,currency,note
 
 > 富士通 6702 は父保有分のため、CSVに含まれていても本アプリでは自動的に除外されます。
 
-## 🎨 共通仕様: コンパクトUI (株価チェック特化)
+## 🎨 共通仕様: PC/スマホで分けたコンパクトUI
 
-- **上部ヘッダーをミニマル化**: 「📈 Aさん株価ボード (yfinance・遅延)」「🔄 更新」「自動更新」を1行に詰めた小型ヘッダー
-- **全タブのタイトルを h5 サイズ** (`##### Portfolio` 等) に統一
-- **block-container の余白を縮小**: padding-top 0.5rem / padding-bottom 0.8rem / max-width 100%
-- **見出しの margin** を 0.3〜0.4rem に詰め
-- **タブ下余白・caption 上下余白** も詰め
-- **フッターの長文注意書きは削除** (画面密度優先)
-- Settings は管理画面なので長い説明文を expander 内に格納
-- Streamlit toolbar も `toolbarMode = "minimal"` で最小化
+### CSS は @media クエリで PC / スマホを分離
+- **PC (≥641px)**: `padding-top: 1.0rem` ・h*の margin 0.5rem ・更新ボタンや自動更新UIが見やすい標準余白
+- **スマホ (≤640px)**: `padding-top: 0.5rem` ・h*の margin 0.3-0.4rem ・Homeタイル優先で余白詰め
+- 全タブのタイトルは h4 (`#### Portfolio` 等)
+- **ヘッダー** はPC/スマホ共通だが、CSS余白で自動調整:
+  - タイトル `#### 📈 Aさん株価ボード` + caption `📡 yfinance・遅延`
+  - 手動更新ボタン `🔄 手動更新` (primary)
+  - 自動更新 selectbox (ラベル表示)
+- **タブ下余白・caption 余白** は両方で詰め
+- Streamlit toolbar も `toolbarMode = "minimal"`
+- Home タイル用CSS は `.home-tile-grid` スコープに限定し、ヘッダー / Portfolio / Settings に影響しない
 
 ## 🎨 画面構成 (3タブ)
 
