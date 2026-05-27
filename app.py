@@ -170,28 +170,24 @@ def resolve_symbol_name(code: str, market: str) -> Optional[str]:
 
 @st.cache_data(show_spinner=False, ttl=600)
 def load_watchlist() -> pd.DataFrame:
-    """data/watchlist.csv を読み込む。エンコーディング揺れに耐える。
-
-    short_name 列があれば優先 (Home タイルで短縮表示用)。なくても動作する。
-    """
+    """data/watchlist.csv を読み込む。エンコーディング揺れに耐える。"""
     paths = [WATCHLIST_CSV]
     for enc in ("utf-8-sig", "cp932"):
         for path in paths:
             try:
                 df = pd.read_csv(path, encoding=enc, dtype=str)
-                # 必須列 + short_name (任意)
-                for col in ("group", "code", "name", "short_name", "market", "currency", "is_active", "note"):
+                # 必須列
+                for col in ("group", "code", "name", "market", "currency", "is_active"):
                     if col not in df.columns:
                         df[col] = ""
                 df["code"] = df["code"].fillna("").astype(str).str.strip()
-                df["short_name"] = df["short_name"].fillna("").astype(str).str.strip()
                 df["is_active"] = pd.to_numeric(df["is_active"], errors="coerce").fillna(1).astype(int)
                 return df
             except FileNotFoundError:
                 continue
             except Exception:
                 continue
-    return pd.DataFrame(columns=["group", "code", "name", "short_name", "market", "currency", "is_active", "note"])
+    return pd.DataFrame(columns=["group", "code", "name", "market", "currency", "is_active", "note"])
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -527,168 +523,6 @@ def _build_home_rows(sub: pd.DataFrame, prices: dict[str, PriceData]) -> pd.Data
     return pd.DataFrame(rows, columns=["銘柄", "コード", "現在価格", "前日騰落率"])
 
 
-def inject_global_css() -> None:
-    """全体の余白詰め + Homeタイル(.home-tile-grid)専用CSS。
-
-    重要: グローバルな `stHorizontalBlock` / `stButton` への CSS は当てない。
-    Home のタイルは `.home-tile-grid` クラスでスコープ化し、ヘッダー/Portfolio/Settings に
-    影響しないようにする。
-    """
-    st.markdown(
-        """
-<style>
-/* ===== PC (≥641px): Streamlit標準を尊重・カスタマイズなし =====
-   PCでは余白・見出しmarginにカスタムCSSを当てない (上部が切れないように)。
-*/
-
-/* ===== スマホ (≤640px): 余白を詰めてHomeタイル優先 ===== */
-@media (max-width: 640px) {
-    .stApp .block-container {
-        padding-top: 0.5rem !important;
-        padding-bottom: 0.8rem !important;
-        padding-left: 0.6rem !important;
-        padding-right: 0.6rem !important;
-        max-width: 100% !important;
-    }
-    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
-        margin-top: 0.3rem !important;
-        margin-bottom: 0.4rem !important;
-    }
-    /* スマホのみタブ下を詰める */
-    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
-        margin-bottom: 0.3rem !important;
-    }
-    .stApp [data-testid="stCaptionContainer"] {
-        margin-top: 0 !important;
-        margin-bottom: 0.2rem !important;
-    }
-}
-
-/* ===== Home専用タイルグリッド (.home-tile-grid スコープ) ===== */
-.home-tile-grid {
-    display: grid;
-    gap: 6px;
-    margin: 2px 0 8px 0;
-}
-@media (max-width: 360px) {
-    .home-tile-grid { grid-template-columns: repeat(2, 1fr); gap: 3px; }
-}
-@media (min-width: 361px) and (max-width: 640px) {
-    .home-tile-grid { grid-template-columns: repeat(3, 1fr); gap: 3px; }
-}
-@media (min-width: 641px) {
-    .home-tile-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px; }
-}
-.home-tile {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-decoration: none !important;
-    color: #1f2937 !important;
-    height: 76px;
-    padding: 5px 4px;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    background: #ffffff;
-    box-shadow: 0 1px 1px rgba(0,0,0,0.03);
-    text-align: center;
-    overflow: hidden;
-    cursor: pointer;
-}
-.home-tile:hover {
-    background: #f3f4f6;
-    border-color: #9ca3af;
-}
-.home-tile.selected {
-    border-color: #2563eb;
-    background: #eff6ff;
-}
-.home-tile-name {
-    font-size: 0.82rem;
-    font-weight: 600;
-    line-height: 1.2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-}
-.home-tile-price {
-    font-size: 0.92rem;
-    font-weight: 700;
-    margin-top: 2px;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-}
-.home-tile-chg {
-    font-size: 0.78rem;
-    font-weight: 600;
-    margin-top: 1px;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-}
-.home-section-title {
-    font-size: 0.95rem;
-    font-weight: 700;
-    margin: 6px 0 4px 0;
-    color: #374151;
-}
-</style>
-""",
-        unsafe_allow_html=True,
-    )
-
-
-def _short_display_name(row: pd.Series, max_len: int = 6) -> str:
-    """タイル表示用の短縮銘柄名を返す。
-
-    優先順:
-      1. row['short_name'] (CSVで指定)
-      2. row['name'] を max_len 文字に切り詰め
-    """
-    short = str(row.get("short_name", "") or "").strip()
-    if short:
-        return short
-    full = str(row.get("name", "")).strip()
-    if len(full) > max_len:
-        return full[:max_len]
-    return full
-
-
-def _tile_card_html(row: pd.Series, price: PriceData, selected: bool) -> str:
-    """1銘柄分のHTMLカード文字列を返す。クリックでクエリパラメータ更新。"""
-    code = str(row.get("code", "")).strip()
-    currency = str(row.get("currency", "JPY")).strip() or "JPY"
-    display_name = _short_display_name(row, max_len=6)
-
-    if not price.ok or price.current_price is None:
-        price_html = "<span style='color:#9ca3af;'>取得失敗</span>"
-        chg_html = ""
-    else:
-        price_html = fmt_price(price.current_price, currency)
-        if price.change_pct is None:
-            chg_html = "<span style='color:#6b7280;'>-</span>"
-        else:
-            sign = "+" if price.change_pct >= 0 else ""
-            if price.change_pct > 0.0001:
-                color, mark = "#2563eb", "🔵"
-            elif price.change_pct < -0.0001:
-                color, mark = "#dc2626", "🔴"
-            else:
-                color, mark = "#6b7280", "⚪"
-            chg_html = f"<span style='color:{color};'>{mark} {sign}{price.change_pct:.2f}%</span>"
-
-    sel_class = " selected" if selected else ""
-    # href にコードをクエリパラメータで埋め込み (Streamlit が rerun 時に検知)
-    return (
-        f'<a class="home-tile{sel_class}" href="?select={code}" target="_self">'
-        f'<div class="home-tile-name">{display_name}</div>'
-        f'<div class="home-tile-price">{price_html}</div>'
-        f'<div class="home-tile-chg">{chg_html}</div>'
-        f'</a>'
-    )
-
-
 def _home_header_text(row: pd.Series, price: PriceData) -> str:
     """expander見出し用の1行テキスト。
 
@@ -768,31 +602,30 @@ def render_home_expander(row: pd.Series, price: PriceData) -> None:
 
 
 def render_home_section(title: str, sub: pd.DataFrame, prices: dict[str, PriceData],
-                        key_prefix: str = "tile") -> None:
-    """Home用セクション: 小見出し + .home-tile-grid (HTMLカード+CSS grid)。
+                        columns_per_row: int = 4) -> None:
+    """Home用セクション: タイトル + 銘柄タイル (st.columns でグリッド表示)。
 
-    実装方針:
-      - st.columns は使わない (CSS波及を避ける)
-      - 全タイルを1つの <div class="home-tile-grid"> HTMLブロックで描画
-      - 各タイルは <a href="?select={code}"> で構成 → クリックでクエリパラメータ更新
-      - main() で `st.query_params['select']` を検知して selected_home_code を更新
+    - PCでは columns_per_row 個ずつ横に並ぶ (デフォルト4列)
+    - スマホでは Streamlit のレスポンシブ動作で自動的に1列縦並びに切り替わる
+    - 各タイルは st.expander で、開くとチャートが表示される
     """
-    st.markdown(
-        f"<div class='home-section-title'>{title} ({len(sub)})</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"#### {title} ({len(sub)})")
     if sub.empty:
         st.caption("(対象なし)")
         return
 
-    selected = st.session_state.get("selected_home_code", "")
-    cards: list[str] = []
-    for _, row in sub.iterrows():
-        code = str(row.get("code", "")).strip()
-        price = prices.get(code, PriceData(symbol=code, error="未取得"))
-        cards.append(_tile_card_html(row, price, selected=(code == selected)))
-    html = '<div class="home-tile-grid">' + "".join(cards) + "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+    rows = list(sub.iterrows())
+    n = max(1, int(columns_per_row))
+    # n 個ずつのチャンクに分割して横並びに表示
+    for i in range(0, len(rows), n):
+        chunk = rows[i:i + n]
+        cols = st.columns(n)
+        for j, (_, row) in enumerate(chunk):
+            code = str(row.get("code", "")).strip()
+            price = prices.get(code, PriceData(symbol=code, error="未取得"))
+            with cols[j]:
+                render_home_expander(row, price)
+        # 余ったカラムは空のまま (高さ揃え)
 
 
 # =============================================================================
@@ -867,61 +700,35 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     - st.dataframe ベース実装 (HTML文字列描画はしない)
     - 表の行クリックで下部にチャート表示 (1時間足/日足/週足切替)
     """
-    # Home上部の大見出し・説明文は削除して即タイル表示 (上部スペース節約)
-    # 保有・Watch のタイル一覧 (列数はCSS gridで自動・スマホ3列/PC4-6列)
-    visible = watch_df[(watch_df["is_active"] == 1) & (watch_df["group"] != GROUP_EXCLUDED)]
+    st.markdown("### 🏠 Home  — 銘柄一覧")
+    st.caption("タイル状に並ぶ各銘柄をタップ/クリックで展開するとチャートが表示されます。閉じればチャートも隠れます。")
+
+    # 列数選択 (PC4-6列・スマホ1-2列)・スマホは自動で縦並びになる
+    n_cols = st.radio(
+        "列数",
+        [1, 2, 3, 4, 5, 6],
+        index=3,  # default 4列
+        horizontal=True,
+        format_func=lambda x: f"{x}列",
+        key="home_tile_cols",
+        help="PCは4-5列推奨・スマホは1-2列推奨 (狭幅画面ではStreamlitが自動的に縦並びに調整します)",
+    )
 
     for group_name in (GROUP_HOLD, GROUP_WATCH):
         sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
         if sub.empty:
             continue
         label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
-        key_prefix = "hold" if group_name == GROUP_HOLD else "watch"
-        render_home_section(label, sub, prices, key_prefix=key_prefix)
-
-    # ----- 選択中チャート (Home下部・タイル選択後に表示) -----
-    selected_code = st.session_state.get("selected_home_code")
-    if not selected_code or visible[visible["code"] == selected_code].empty:
-        return  # 未選択時は何も表示しない (画面を株価一覧優先)
-
-    st.markdown("---")
-    row = visible[visible["code"] == selected_code].iloc[0]
-    name = str(row.get("name", ""))
-    market = str(row.get("market", "JP")).strip().upper() or "JP"
-    currency = str(row.get("currency", "JPY")).strip().upper() or "JPY"
-
-    render_interval_chart(
-        code=selected_code,
-        market=market,
-        name=name,
-        currency=currency,
-        interval_label="1時間足",
-        key_prefix=f"home_chart_{selected_code}",
-        height=320,
-    )
-    link_cols = st.columns(2)
-    link_cols[0].markdown(f"[📊 Yahoo]({yahoo_link(selected_code, market)})")
-    link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(selected_code, market)})")
+        render_home_section(label, sub, prices, columns_per_row=int(n_cols))
+        st.markdown("")  # 軽い余白
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    st.markdown("#### 💼 Portfolio")
+    st.markdown("### 💼 Portfolio")
 
     if positions_df.empty:
         st.info("ポジションCSVが読み込めませんでした。watchlist のみで起動中です。")
         return
-
-    # watchlist から short_name 逆引き辞書を作る (タイル表示用)
-    code_to_short: dict[str, str] = {}
-    try:
-        w = load_watchlist()
-        for _, r in w.iterrows():
-            c = str(r.get("code", "")).strip()
-            sn = str(r.get("short_name", "") or "").strip()
-            if c and sn:
-                code_to_short[c] = sn
-    except Exception:
-        code_to_short = {}
 
     # ----- 1) 内部行を構築 (数値+表示用文字列を併記) -----
     rows = []
@@ -954,13 +761,9 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
             total_cost += avg_cost * shares
             has_any_avg_cost = True
 
-        # 表示用銘柄名: short_name (watchlist) → なければ name を6文字短縮
-        full_name = str(p.get("name", "")).strip()
-        disp_name = code_to_short.get(code) or (full_name[:6] if len(full_name) > 6 else full_name)
-
         rows.append({
             "コード": code,
-            "銘柄名": disp_name,
+            "銘柄名": p.get("name", ""),
             "株数": int(shares),
             "平均取得単価": avg_cost,  # 数値 or None
             "現在値": cur,              # 数値 or None
@@ -1038,22 +841,30 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
         return f"{sign}{v:.2f}%"
 
     df_internal["平均取得単価_disp"] = df_internal["平均取得単価"].apply(
-        lambda v: f"{v:,.0f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "未入力"
+        lambda v: f"{v:,.1f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "未入力"
     )
     df_internal["現在値_disp"] = df_internal["現在値"].apply(
-        lambda v: f"{v:,.0f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "-"
+        lambda v: f"{v:,.1f}" if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "-"
     )
+    df_internal["評価額"] = df_internal["評価額_num"].apply(fmt_money_abs)
     df_internal["評価損益"] = df_internal["評価損益_num"].apply(fmt_money)
+    df_internal["評価損益率"] = df_internal["評価損益率_num"].apply(fmt_pct)
+    df_internal["前日比"] = df_internal["前日比_num"].apply(fmt_num1)
+    df_internal["前日比率"] = df_internal["前日比率_num"].apply(fmt_pct_simple)
 
-    # ----- 4) 表 (4列のみ: 銘柄名 / 取得単価 / 現在値 / 評価損益) -----
-    display_cols = ["銘柄名", "平均取得単価_disp", "現在値_disp", "評価損益"]
+    # 表示列だけ抽出 (_num 系は表示しない)
+    display_cols = [
+        "コード", "銘柄名", "株数",
+        "平均取得単価_disp", "現在値_disp",
+        "評価額", "評価損益", "評価損益率", "前日比", "前日比率",
+    ]
     df_display = df_internal[display_cols].rename(columns={
-        "平均取得単価_disp": "取得単価",
+        "平均取得単価_disp": "平均取得単価",
         "現在値_disp": "現在値",
     })
 
-    # 評価損益列だけに色付け (プラス青 / マイナス赤 / ゼロ灰)
-    pnl_cols = ["評価損益"]
+    # ----- 4) 表 (損益・前日比系列に色付け) -----
+    pnl_cols = [c for c in ("評価損益", "評価損益率", "前日比", "前日比率") if c in df_display.columns]
     styled_df = df_display
     ok_styled = False
     try:
@@ -1069,40 +880,39 @@ def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> 
         ok_styled = False
 
     table_height = min(600, 35 * (len(df_display) + 1) + 8)
+    # keyを変えて古い列ヘッダーソート状態をリセット (上部の並び替えselectboxを正とする)
     st.dataframe(
         styled_df,
         use_container_width=True,
         hide_index=True,
         height=table_height,
-        key="portfolio_table_v4",
+        key="portfolio_table_v3",
     )
     if not ok_styled:
         st.warning("色付けに失敗しました (プレーン表示)")
 
-    # ----- 5) 合計メトリクスを表の下に縦並びで配置 (スマホで数字が潰れないように) -----
+    # ----- 5) 合計メトリクスを表の下に配置 -----
     total_value = float(df_internal["評価額_num"].sum(skipna=True))
     pnl_total = float(df_internal["評価損益_num"].sum(skipna=True)) if has_any_avg_cost else None
     pnl_pct_total: Optional[float] = None
     if has_any_avg_cost and total_cost > 0 and pnl_total is not None:
         pnl_pct_total = pnl_total / total_cost * 100
 
-    # PC では横3列・スマホでも Streamlit のレスポンシブで縦並びに自動切替
-    # (グローバル stHorizontalBlock CSS は削除済なので st.columns が正常動作)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("日本株PF評価額合計", fmt_yen(total_value))
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("日本株PF評価額合計", fmt_yen(total_value))
     if pnl_total is not None:
-        m2.metric(
+        metric_cols[1].metric(
             "評価損益合計",
             fmt_yen(pnl_total),
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else None,
         )
-        m3.metric(
+        metric_cols[2].metric(
             "評価損益率",
             f"{pnl_pct_total:+.2f}%" if pnl_pct_total is not None else "-",
         )
     else:
-        m2.metric("評価損益合計", "未入力")
-        m3.metric("評価損益率", "未入力")
+        metric_cols[1].metric("評価損益合計", "未入力")
+        metric_cols[2].metric("評価損益率", "未入力")
     # ※ 表の下には合計メトリクスのみ・注意書きは置かない (READMEとSettingsに記載済)
 
 
@@ -1125,16 +935,15 @@ def _normalize_watchlist(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     """watchlist編集後のバリデーション。問題があればメッセージを返す。"""
     msgs: list[str] = []
     if df is None or df.empty:
-        return pd.DataFrame(columns=["group", "code", "name", "short_name", "market", "currency", "is_active", "note"]), ["空のテーブルです"]
+        return pd.DataFrame(columns=["group", "code", "name", "market", "currency", "is_active", "note"]), ["空のテーブルです"]
     df = df.copy()
-    for col in ("group", "code", "name", "short_name", "market", "currency", "is_active", "note"):
+    for col in ("group", "code", "name", "market", "currency", "is_active", "note"):
         if col not in df.columns:
             df[col] = ""
 
     # 必須列正規化
     df["code"] = df["code"].fillna("").astype(str).str.strip()
     df["name"] = df["name"].fillna("").astype(str).str.strip()
-    df["short_name"] = df["short_name"].fillna("").astype(str).str.strip()
     df["group"] = df["group"].fillna("").astype(str).str.strip()
     df["market"] = df["market"].fillna("JP").astype(str).str.strip().str.upper()
     df["currency"] = df["currency"].fillna("JPY").astype(str).str.strip().str.upper()
@@ -1179,7 +988,7 @@ def _normalize_watchlist(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         msgs.append(f"重複コード: {', '.join(dup_codes)} (最後の行を採用)")
         df = df.drop_duplicates(subset=["code"], keep="last")
 
-    df = df[["group", "code", "name", "short_name", "market", "currency", "is_active", "note"]].reset_index(drop=True)
+    df = df[["group", "code", "name", "market", "currency", "is_active", "note"]].reset_index(drop=True)
     return df, msgs
 
 
@@ -1256,11 +1065,9 @@ def _read_positions_raw() -> pd.DataFrame:
 
 
 def _upsert_watchlist(group: str, code: str, name: str, market: str, currency: str,
-                     is_active: bool, note: str, short_name: str = "") -> tuple[pd.DataFrame, bool]:
+                     is_active: bool, note: str) -> tuple[pd.DataFrame, bool]:
     """既存コードがあれば更新、なければ追加。(df, was_update) を返す。"""
     df = _read_watchlist_raw()
-    if "short_name" not in df.columns:
-        df["short_name"] = ""
     code = str(code).strip()
     if market == "US":
         code = code.upper()
@@ -1270,7 +1077,6 @@ def _upsert_watchlist(group: str, code: str, name: str, market: str, currency: s
         "group": group,
         "code": code,
         "name": name.strip(),
-        "short_name": (short_name or "").strip(),
         "market": market,
         "currency": currency,
         "is_active": 1 if is_active else 0,
@@ -1401,13 +1207,6 @@ def _easy_add_form() -> None:
         help="「🔎 銘柄名を取得」で補完できます。日本株でも英語名で返る場合あり (手で修正可)",
     )
 
-    short_name = st.text_input(
-        "短縮表示名 (Homeタイル用・任意)",
-        placeholder="例: トヨタ / Apple (最大6文字推奨・空欄なら名前を6文字で自動短縮)",
-        key="add_short_name",
-        help="Homeタイルに表示される短い銘柄名。空欄でも自動短縮で表示されます。",
-    )
-
     note = st.text_input("メモ (任意)", placeholder="任意メモ", key="add_note")
 
     # 保有時の追加項目 (フォーム外でも保持される)
@@ -1444,7 +1243,6 @@ def _easy_add_form() -> None:
     w_df, w_was_update = _upsert_watchlist(
         group=group_label, code=code_clean, name=name, market=market,
         currency=currency, is_active=is_active, note=note,
-        short_name=short_name,
     )
     w_norm, _ = _normalize_watchlist(w_df)
     _save_csv_with_backup(w_norm, WATCHLIST_CSV)
@@ -1631,7 +1429,6 @@ def _watchlist_editor_section() -> None:
         "group": st.column_config.SelectboxColumn("group", options=GROUP_OPTIONS, required=True),
         "code": st.column_config.TextColumn("code", required=True),
         "name": st.column_config.TextColumn("name", required=True),
-        "short_name": st.column_config.TextColumn("short_name (任意・Homeタイル用)", width="small"),
         "market": st.column_config.SelectboxColumn("market", options=MARKET_OPTIONS, required=True),
         "currency": st.column_config.SelectboxColumn("currency", options=CURRENCY_OPTIONS, required=True),
         "is_active": st.column_config.CheckboxColumn("is_active", default=True),
@@ -1735,7 +1532,7 @@ def _positions_editor_section() -> None:
 
 
 def page_settings() -> None:
-    st.markdown("#### ⚙️ Settings")
+    st.markdown("### ⚙️ Settings")
 
     st.markdown("#### 表示グループ")
     cols = st.columns(2)
@@ -1836,38 +1633,18 @@ def schedule_autorefresh(interval_sec: int) -> None:
 # =============================================================================
 
 def main() -> None:
-    # 全体余白詰め + Homeタイル専用CSSを最初に挿入
-    inject_global_css()
-
-    # クエリパラメータ ?select=XXXX を検知してタイル選択を更新
-    try:
-        sel = st.query_params.get("select")
-        if sel:
-            st.session_state["selected_home_code"] = str(sel)
-            # クリアして URL を綺麗に保つ (rerun ループ防止)
-            try:
-                del st.query_params["select"]
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # ヘッダー (PCでは標準サイズ・スマホはCSS側で詰める)
-    header_cols = st.columns([5, 2, 2])
+    # ヘッダー
+    header_cols = st.columns([4, 2, 2])
     with header_cols[0]:
-        st.markdown("#### 📈 Aさん株価ボード")
+        st.title("📈 Aさん株価ボード")
         st.caption("📡 株価データは yfinance 取得のため **遅延/準リアルタイム** です")
     with header_cols[1]:
-        st.write("")  # 縦位置を少し下げる
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
-            fetch_one.clear()
-            fetch_history_cached.clear()
+            fetch_one.clear()  # キャッシュクリア
             st.rerun()
+        st.caption(f"最終更新: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     with header_cols[2]:
-        interval = st.selectbox(
-            "自動更新", ["なし", "60秒", "180秒", "300秒"],
-            index=0,
-        )
+        interval = st.selectbox("自動更新", ["なし", "60秒", "180秒", "300秒"], index=0)
 
     interval_map = {"なし": 0, "60秒": 60, "180秒": 180, "300秒": 300}
     schedule_autorefresh(interval_map[interval])
@@ -1886,10 +1663,10 @@ def main() -> None:
     with st.spinner("価格データ取得中..."):
         prices = fetch_all(visible, period="6mo", provider_name="yfinance")
 
-    # 取得失敗集計 (大きな警告は出さず、小さいキャプションのみ)
+    # 取得失敗の集計
     failed = [c for c, p in prices.items() if not p.ok]
     if failed:
-        st.caption(f"※ 一部銘柄 ({len(failed)}件) は取得に失敗・タイル内に「取得失敗」と表示されます")
+        st.warning(f"⚠️ {len(failed)} 銘柄の取得に失敗しました: {', '.join(failed[:10])}{' ...' if len(failed)>10 else ''}")
 
     # タブ (Chartsタブ廃止・チャートはHomeのexpander内で確認)
     tabs = st.tabs(["🏠 Home", "💼 Portfolio", "⚙️ Settings"])
@@ -1900,7 +1677,12 @@ def main() -> None:
     with tabs[2]:
         page_settings()
 
-    # フッター (省略・上部に既に「(yfinance・遅延)」を表示済)
+    # フッター注意
+    st.markdown("---")
+    st.caption(
+        "🛡️ 本アプリは閲覧専用です。自動発注機能はありません。証券会社ログイン情報も保存しません。"
+        " 株価データは yfinance による遅延/準リアルタイム取得です。"
+    )
 
 
 if __name__ == "__main__":

@@ -1,2 +1,0 @@
-code,name,price,previous_close,currency,updated_at,note
-1687,WTアグリETF,1018,1019.5,JPY,manual,ETF fallback (yfinance取得不安定)

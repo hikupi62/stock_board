@@ -122,18 +122,6 @@ code,name,shares,avg_price,currency,note
 | `currency` | 任意 | JPY / USD |
 | `note` | 任意 | 自由メモ |
 
-### Portfolioタブの表示仕様 (スマホ向け4列+縦並びメトリクス)
-- **表は4列のみ**: 銘柄名 / 取得単価 / 現在値 / 評価損益 (コード・株数・評価額・前日比は省略)
-- **銘柄名**: watchlist の `short_name` を優先・なければ `name` を6文字短縮
-- **初期並び順**: 評価損益_num **降順** (プラス大 → マイナス大の順)
-- **並び替えselectbox**: 評価損益/評価額/損益率/前日比率/コード/銘柄名の昇降順 (上部に配置)
-- **評価損益列の色**: プラス青 / マイナス赤 / ゼロ灰 (`_pct_color_style`)
-- **トータル (表の下に必ず表示・PC横3列 / スマホは自動レスポンシブ)**:
-  - 日本株PF評価額合計
-  - 評価損益合計 (delta = 損益率)
-  - 評価損益率
-- **下部の注意書きは出さない**
-
 ### `avg_price` の扱い
 
 - **`avg_price` を入力すると** Portfolio タブで **評価損益・評価損益率が自動計算** されます
@@ -230,26 +218,12 @@ code,name,shares,avg_price,currency,note
 
 > 富士通 6702 は父保有分のため、CSVに含まれていても本アプリでは自動的に除外されます。
 
-## 🎨 共通仕様: PC標準・スマホ最適化
-
-### CSS は PC では Streamlit 標準を尊重し、スマホ用CSSだけ @media (max-width: 640px) に閉じ込め
-
-- **PC (≥641px)**: カスタムCSSなし → Streamlit 標準の padding / margin を使用
-  - 更新ボタン・自動更新UIが切れない
-  - 上部ツールバーと重ならない
-  - ヘッダー: `#### 📈 Aさん株価ボード` + caption + `🔄 手動更新` ボタン + 自動更新 selectbox (横3列で見やすい)
-- **スマホ (≤640px)**: `padding-top: 0.5rem` ・h*の margin 0.3rem ・タブ下余白 / caption も詰め
-- 全タブのタイトルは h4 (`#### Portfolio` 等)・Streamlit標準サイズで両方使い回し
-- グローバル `stHorizontalBlock` / `stButton` への CSS は**一切当てない**
-- Streamlit toolbar は `toolbarMode = "minimal"`
-- Home タイル用CSS は `.home-tile-grid` スコープに限定し、ヘッダー / Portfolio / Settings に影響しない
-
 ## 🎨 画面構成 (3タブ)
 
 | タブ | 内容 |
 |---|---|
 | 🏠 Home | 銘柄ごとの **expander 形式**。見出しに 銘柄名・コード・価格・🔵/🔴/⚪+騰落率。開くと色付き騰落率 + **1時間足/日足/週足切替チャート** + Yahoo/TradingView リンク |
-| 💼 Portfolio | スマホ向け4列 (銘柄名 / 取得単価 / 現在値 / 評価損益)・並び替えselectbox・トータルは縦並びメトリクス |
+| 💼 Portfolio | 保有銘柄一覧・株数・平均取得単価・評価額・評価損益・損益率 (色付き) |
 | ⚙️ Settings | **銘柄管理フォーム (追加・削除・移動)** + 詳細CSV編集 (折りたたみ) |
 
 > **Chartsタブは廃止**。チャートは Home の各銘柄 expander を開いて確認します。
@@ -264,40 +238,23 @@ code,name,shares,avg_price,currency,note
 | **Watch** | 日本株Watch銘柄 + MSTR / WDC / STX (米国株サテライト) |
 | **除外** | 6326 クボタ (売却済) / 285A キオクシア / 6702 富士通 (父保有分) — 通常表示しない |
 
-### Home実装のスコープ化 (PC画面崩れ対策)
-
-- グローバル `div[data-testid="stHorizontalBlock"]` への CSS は当てない (ヘッダー / Portfolio / Settings 全タブの `st.columns` 構造に波及するため)
-- Home のタイルは **`.home-tile-grid` クラス内のHTMLカード** で描画し、CSS をこのスコープ内に限定
-- クリック検知は `<a href="?select={code}">` リンク → `st.query_params['select']` を main() で検知 → `selected_home_code` を更新
-- これにより PC でヘッダー・Portfolio・Settings の列レイアウトが壊れない
-
-### Home画面の表示仕様 (世界の株価風・密度高めタイル)
-- 各セクション (保有銘柄 / Watch銘柄) を **小型カードタイル** で敷き詰め表示
-- **1銘柄 = 1ボタン (カード風)** ・タイル自体タップでチャート選択
-- **列数は画面幅で自動**:
-  - **小型スマホ (≤360px)**: 2列固定
-  - **スマホ (361-640px)**: 3列固定
-  - **PC (≥641px)**: 140px幅で auto-fit (4-6列)
-- **タイル仕様** (高さ 72px・余白 3-4px・3行固定):
-  - 1行目: **銘柄名** (`short_name` 優先、なければ `name` を6文字で短縮・1行省略)
-  - 2行目: **現在価格** (¥xxx / $xxx)
-  - 3行目: **🔵 +x.xx% / 🔴 -x.xx% / ⚪ 0.00%**
-  - コードは表示しない (画面密度優先)
-  - 取得失敗時は「取得失敗」と表示
-- **`short_name` 列** (`watchlist.csv`):
-  - Home タイルでの短縮表示用 (任意)
-  - 既存銘柄に「コメ兵HD / クレセゾン / WTアグリ」等を同梱
-  - 空欄でも自動短縮 (6文字)
-  - Settings の銘柄追加フォーム・詳細CSV編集の両方で編集可能
-- **Home上部のヘッダー**:
-  - タイトル小型化 (`##### 📈 Aさん株価ボード (yfinance・遅延)`)
-  - 自動更新 selectbox のラベル非表示
-  - 余計な説明文は省略
-- **選択中タイル**: Streamlit primary ボタンで青枠強調
-- **選択中チャート (Home下部・タイル選択時のみ表示)**:
-  - 初期未選択時は何も表示せず、株価一覧優先
-  - 選択後: 1時間足 (初期) / 日足 / 週足 切替 + Yahoo/TradingView リンク
-- 取得失敗銘柄: 画面上部大警告なし・小キャプション + タイル内「取得失敗」表示
+### Home画面の表示仕様 (タイルグリッド形式)
+- 各セクション (保有銘柄 / Watch銘柄) を **タイルグリッド** で表示
+- 1銘柄 = 1タイル = `st.expander` (枠付きボックス)
+- 画面上部の **列数ラジオ** で 1〜6列を切替可能 (デフォルト 4列)
+  - PC推奨: 4-5列
+  - スマホ推奨: 1-2列 (狭幅画面ではStreamlitが自動的に縦並びに調整)
+- **タイル見出し** (1行):
+  - 銘柄名 ・ コード ・ 現在価格 ・ **🔵 (+x.xx%) / 🔴 (-x.xx%) / ⚪ (0.00%)**
+  - Streamlit expander の見出しはプレーンテキスト扱いで色CSSが効かないため、色の代わりに絵文字マーカーを使用
+- **タイルを開くと**:
+  - 上部に色付き Markdown で `現在値 ¥xxx 　 前日騰落率 +x.xx%` (プラス青/マイナス赤/ゼロ灰)
+  - その下に **1時間足/日足/週足 切替チャート** (初期=1時間足)
+  - Yahoo / TradingView 外部リンク
+- タイルを閉じればチャートも隠れる (チャート取得は開いたときだけ・キャッシュ180秒)
+- 取得失敗銘柄は見出しに「取得失敗」と表示し、他銘柄は継続表示
+- HTMLは limit 使用 (span1つだけ・サニタイズ低リスク)
+- チャートは Home のタイルを開いて確認します (専用Chartsタブは廃止)
 
 ### チャートの足種
 - **1時間足**: yfinance `interval=60m, period=60d` (**初期表示**) — 日本株では取得不可・欠損のケースあり (取得不可時は警告表示・日足/週足への切替を推奨)
@@ -348,49 +305,13 @@ code,name,market,sector,note
 ### 初期同梱マスタ
 保有・Watch・除外の全日本株コードを日本語名で同梱しています (1687/1695/2780/4633/5032/5857/6326/6432/6702/6814/6995/7864/7994/8020/8059/8253/8316/8593/8830/9433/9960/1980/3626/4206/4722/285A の26銘柄)。
 
-## 📡 yfinance版の限界 と Fallback (`data/manual_prices.csv`)
+## 📡 yfinance版の限界
 
 1. **完全リアルタイムではない** (遅延/準リアルタイム)
 2. **日本株は数分単位で遅れる** 可能性
 3. **板情報・約定情報・証券口座情報は取れない**
 4. **ファンダメンタル情報は使わない** (価格・出来高のみ・本アプリ方針)
 5. **価格誤差はあり得る** (最終判断は証券会社の正式画面で)
-
-### ETF / 低流動性銘柄の取得失敗対策 (Fallback)
-
-`1687 WTアグリETF` のようなETF・低流動性銘柄は **Streamlit Cloud 環境で yfinance 取得に失敗** することがあります。
-
-`price_provider.py` の `fetch_history()` は以下の順でフォールバックします：
-
-| 段 | 取得元 | source |
-|---:|---|---|
-| 1 | `yfinance.history(period, interval)` | `yfinance` |
-| 2 | `yfinance.history(period="5d", interval="1d")` | `yfinance_5d` |
-| 3 | `ticker.fast_info` の `last_price` / `previous_close` | `fast_info` |
-| 4 | `ticker.info` の `regularMarketPrice` / `previousClose` | `info` |
-| 5 | **`data/manual_prices.csv` の手動値** | `manual` |
-| 6 | すべて失敗 → 「取得失敗」表示 | (error) |
-
-### `data/manual_prices.csv` の列構成
-
-```csv
-code,name,price,previous_close,currency,updated_at,note
-1687,WTアグリETF,1018,1019.5,JPY,manual,ETF fallback (yfinance取得不安定)
-```
-
-- `code`: 銘柄コード (4桁 / 英数字)
-- `name`: 銘柄名 (参考)
-- `price`: 手動現在値
-- `previous_close`: 手動前日終値 (空欄なら前日比は `-`)
-- `currency`: JPY / USD
-- `updated_at`: 更新メモ (`manual` / 日付など)
-- `note`: 任意メモ
-
-### 手動値の取り扱い
-
-- `manual` source の銘柄はタイル内に **「※ 手動値」** と小さく表示されます
-- **古くなる可能性があるため、最終確認は証券会社画面で必ず行ってください**
-- 必要に応じて `manual_prices.csv` を編集して値を更新します
 
 ## 🛠️ 将来の改善計画
 
