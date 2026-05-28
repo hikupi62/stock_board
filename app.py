@@ -29,6 +29,14 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
+# JST タイムゾーン (Streamlit Cloud は UTC 環境のため日本時間で表示する)
+# zoneinfo (Python 3.9+) を優先・OSにtzdataが無い場合は固定オフセットでfallback。
+try:
+    from zoneinfo import ZoneInfo  # type: ignore
+    JST = ZoneInfo("Asia/Tokyo")
+except Exception:
+    JST = dt.timezone(dt.timedelta(hours=9), "JST")
+
 # Provider 層は別ファイル (差し替え容易にする)
 from price_provider import (
     PriceData,
@@ -1875,7 +1883,8 @@ def main() -> None:
 
     with st.spinner("価格データ取得中..."):
         prices = fetch_all(visible, period="6mo", provider_name="yfinance")
-    fetched_at = dt.datetime.now()
+    # JSTで取得時刻を記録 (Streamlit CloudはUTC環境のため明示変換が必要)
+    fetched_at = dt.datetime.now(JST)
 
     # ----- 価格データ鮮度表示 (ヘッダー直下に1か所だけ・タブを問わず共通) -----
     # 銘柄タイルやPortfolio表内には source / data_time を入れない。
