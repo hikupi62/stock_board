@@ -27,7 +27,9 @@ import csv
 import datetime as dt
 import json
 import os
+import socket
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from urllib import error as urlerr
@@ -48,9 +50,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "kabu_config.json"
 EXAMPLE_PATH = SCRIPT_DIR / "kabu_config.example.json"
 OUTPUT_CSV = SCRIPT_DIR / "data" / "kabu_prices_test.csv"
+FAILED_CSV = SCRIPT_DIR / "data" / "kabu_prices_failed.csv"
 
 # kabuステーション「現物」用のエンドポイント (注文系は一切使わない)
 SAFE_PRICE_ENDPOINTS = ("/token", "/board")
+
+# デフォルト設定 (config 未指定時に使う値)
+DEFAULT_TIMEOUT_SEC = 10
+DEFAULT_RETRY_COUNT = 3
+DEFAULT_RETRY_SLEEP_SEC = 0.5
 
 
 def _print_step(label: str) -> None:
@@ -67,13 +75,17 @@ def _load_config() -> dict:
         "base_url": "http://localhost:18080/kabusapi",
         "exchange": 1,
         "symbols": ["9433", "8020", "2780"],
+        "request_timeout_sec": DEFAULT_TIMEOUT_SEC,
+        "retry_count": DEFAULT_RETRY_COUNT,
+        "retry_sleep_sec": DEFAULT_RETRY_SLEEP_SEC,
     }
 
     if CONFIG_PATH.exists():
         try:
             with CONFIG_PATH.open("r", encoding="utf-8") as f:
                 file_cfg = json.load(f)
-            for k in ("api_password", "base_url", "exchange", "symbols"):
+            for k in ("api_password", "base_url", "exchange", "symbols",
+                      "request_timeout_sec", "retry_count", "retry_sleep_sec"):
                 if k in file_cfg and file_cfg[k] not in (None, ""):
                     cfg[k] = file_cfg[k]
             print(f"[config] {CONFIG_PATH.name} を読み込みました")
@@ -104,7 +116,7 @@ def _load_config() -> dict:
 
 
 def _http_post(url: str, body: dict, headers: Optional[dict] = None,
-               timeout: int = 5) -> tuple[int, dict]:
+               timeout: int = DEFAULT_TIMEOUT_SEC) -> tuple[int, dict]:
     """POST JSON (read-only用途のtoken発行のみ・注文系には絶対使わない)。"""
     if not any(seg in url for seg in SAFE_PRICE_ENDPOINTS):
         raise RuntimeError(f"refusing to POST to unsafe endpoint: {url}")
@@ -126,7 +138,7 @@ def _http_post(url: str, body: dict, headers: Optional[dict] = None,
 
 
 def _http_get(url: str, headers: Optional[dict] = None,
-              timeout: int = 5) -> tuple[int, dict]:
+              timeout: int = DEFAULT_TIMEOUT_SEC) -> tuple[int, dict]:
     """GET JSON (価格board取得のみ)."""
     if not any(seg in url for seg in SAFE_PRICE_ENDPOINTS):
         raise RuntimeError(f"refusing to GET unsafe endpoint: {url}")
@@ -155,11 +167,12 @@ def _mask_token(tok: str) -> str:
     return tok[:6] + "..." + tok[-3:]
 
 
-def get_token(base_url: str, api_password: str) -> Optional[str]:
+def get_token(base_url: str, api_password: str,
+              timeout: int = DEFAULT_TIMEOUT_SEC) -> Optional[str]:
     """POST /token でトークンを発行。失敗時 None。"""
     url = base_url.rstrip("/") + "/token"
     try:
-        status, body = _http_post(url, {"APIPassword": api_password})
+        status, body = _http_post(url, {"APIPassword": api_password}, timeout=timeout)
     except urlerr.URLError as e:
         reason = getattr(e, "reason", e)
         print(f"❌ kabuステーションAPIに接続できません ({reason})")
@@ -186,25 +199,78 @@ def get_token(base_url: str, api_password: str) -> Optional[str]:
         return None
 
 
-def get_board(base_url: str, token: str, symbol: str, exchange: int) -> Optional[dict]:
-    """GET /board/{symbol}@{exchange} で時価情報を取得。失敗時 None。"""
-    url = f"{base_url.rstrip('/')}/board/{symbol}@{exchange}"
-    try:
-        status, body = _http_get(url, headers={"X-API-KEY": token})
-    except urlerr.URLError as e:
-        print(f"  ❌ {symbol} 通信エラー: {getattr(e, 'reason', e)}")
-        return None
-    except Exception as e:
-        print(f"  ❌ {symbol} 予期せぬエラー: {e.__class__.__name__}: {e}")
-        return None
+def _is_transient_error(exc: BaseException) -> bool:
+    """timeoutや一時的な通信エラー (= 再試行する価値あり) かを判定。"""
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    if isinstance(exc, urlerr.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return True
+        if "timed out" in str(reason).lower():
+            return True
+        if "temporarily" in str(reason).lower():
+            return True
+    if isinstance(exc, ConnectionResetError):
+        return True
+    return False
 
-    if status == 200 and isinstance(body, dict):
-        return body
-    if status == 404:
-        print(f"  ❌ {symbol} 銘柄が見つかりません (HTTP 404)")
-    else:
-        print(f"  ❌ {symbol} 取得失敗 (HTTP {status}): {body}")
-    return None
+
+def get_board(base_url: str, token: str, symbol: str, exchange: int,
+              timeout: int = DEFAULT_TIMEOUT_SEC,
+              retry_count: int = DEFAULT_RETRY_COUNT,
+              retry_sleep_sec: float = DEFAULT_RETRY_SLEEP_SEC,
+              ) -> tuple[Optional[dict], Optional[str]]:
+    """GET /board/{symbol}@{exchange} で時価情報を取得 (retry付き)。
+
+    戻り値: (board_dict, error_message)
+      - 成功時: (dict, None)
+      - 失敗時: (None, "エラーメッセージ")  ← スクリプトは止めない
+
+    再試行する条件:
+      - socket.timeout / TimeoutError / 'timed out' を含む URLError
+      - ConnectionResetError
+      - HTTP 429 / 5xx (一時的サーバ側エラー)
+    再試行しない条件:
+      - HTTP 404 (銘柄が存在しない)
+      - HTTP 401/403 (認証問題)
+      - その他 4xx
+    """
+    url = f"{base_url.rstrip('/')}/board/{symbol}@{exchange}"
+    last_err = "unknown"
+    attempts = max(1, int(retry_count))
+
+    for attempt in range(1, attempts + 1):
+        try:
+            status, body = _http_get(url, headers={"X-API-KEY": token}, timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - 1銘柄失敗で全体を止めないため
+            if _is_transient_error(e) and attempt < attempts:
+                print(f"  ⏱  {symbol} timeout/通信エラー (attempt {attempt}/{attempts}) "
+                      f"— {retry_sleep_sec}秒待って再試行")
+                time.sleep(retry_sleep_sec)
+                last_err = f"{e.__class__.__name__}: {e}"
+                continue
+            last_err = f"{e.__class__.__name__}: {e}"
+            return None, f"{last_err} (after {attempt} attempts)"
+
+        # HTTPレスポンス到達
+        if status == 200 and isinstance(body, dict):
+            return body, None
+        if status == 404:
+            return None, "HTTP 404 (銘柄が見つかりません)"
+        if status in (401, 403):
+            return None, f"HTTP {status} (認証エラー)"
+        # 429/5xx は一時的・再試行
+        if (status == 429 or 500 <= status < 600) and attempt < attempts:
+            print(f"  ⚠  {symbol} HTTP {status} (attempt {attempt}/{attempts}) "
+                  f"— {retry_sleep_sec}秒待って再試行")
+            time.sleep(retry_sleep_sec)
+            last_err = f"HTTP {status}: {body}"
+            continue
+        # その他HTTPエラーは再試行せず即失敗
+        return None, f"HTTP {status}: {body}"
+
+    return None, f"failed after {attempts} retries ({last_err})"
 
 
 def print_board_summary(symbol: str, b: dict) -> None:
@@ -264,7 +330,19 @@ def write_csv(rows: list[dict], out_path: Path) -> None:
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in cols})
-    print(f"\n💾 出力: {out_path} ({len(rows)} 行)")
+    print(f"💾 成功CSV: {out_path} ({len(rows)} 行)")
+
+
+def write_failed_csv(failed: list[dict], out_path: Path) -> None:
+    """失敗銘柄のCSV出力 (列: code,error,updated_at)。"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cols = ["code", "error", "updated_at"]
+    with out_path.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in failed:
+            w.writerow({k: r.get(k, "") for k in cols})
+    print(f"💾 失敗CSV: {out_path} ({len(failed)} 行)")
 
 
 def main() -> int:
@@ -278,31 +356,84 @@ def main() -> int:
     base_url = str(cfg["base_url"]).rstrip("/")
     exchange = int(cfg["exchange"])
     symbols = [str(s) for s in cfg["symbols"] if str(s).strip()]
-    print(f"  base_url: {base_url}")
-    print(f"  exchange: {exchange}")
-    print(f"  symbols:  {symbols}")
+    try:
+        timeout_sec = int(cfg.get("request_timeout_sec", DEFAULT_TIMEOUT_SEC))
+    except Exception:
+        timeout_sec = DEFAULT_TIMEOUT_SEC
+    try:
+        retry_count = int(cfg.get("retry_count", DEFAULT_RETRY_COUNT))
+    except Exception:
+        retry_count = DEFAULT_RETRY_COUNT
+    try:
+        retry_sleep = float(cfg.get("retry_sleep_sec", DEFAULT_RETRY_SLEEP_SEC))
+    except Exception:
+        retry_sleep = DEFAULT_RETRY_SLEEP_SEC
+
+    print(f"  base_url:            {base_url}")
+    print(f"  exchange:            {exchange}")
+    print(f"  symbols:             {symbols}")
+    print(f"  request_timeout_sec: {timeout_sec}")
+    print(f"  retry_count:         {retry_count}")
+    print(f"  retry_sleep_sec:     {retry_sleep}")
 
     _print_step("2. トークン取得 (POST /token)")
-    token = get_token(base_url, str(cfg["api_password"]))
+    token = get_token(base_url, str(cfg["api_password"]), timeout=timeout_sec)
     if not token:
         return 1
 
-    _print_step("3. 価格取得 (GET /board/{symbol}@{exchange})")
-    rows: list[dict] = []
+    _print_step("3. 価格取得 (GET /board/{symbol}@{exchange}) — retry付き")
+    success_rows: list[dict] = []
+    success_summary: list[tuple[str, str, object]] = []  # (code, name, price)
+    failed: list[dict] = []
     for sym in symbols:
         print(f"\n--- {sym} ---")
-        b = get_board(base_url, token, sym, exchange)
+        b, err = get_board(
+            base_url, token, sym, exchange,
+            timeout=timeout_sec, retry_count=retry_count, retry_sleep_sec=retry_sleep,
+        )
         if b is None:
+            print(f"  ❌ {sym} 取得失敗: {err}")
+            failed.append({
+                "code": sym,
+                "error": err or "unknown",
+                "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
+            })
             continue
         print_board_summary(sym, b)
-        rows.append(board_to_row(b, sym))
+        row = board_to_row(b, sym)
+        success_rows.append(row)
+        success_summary.append((row["code"], row["name"], row["price"]))
 
-    if not rows:
-        print("\n❌ 1銘柄も取得できませんでした")
+    _print_step("4. 結果サマリ")
+    print(f"  ✅ 成功: {len(success_rows)} 銘柄")
+    for code, name, price in success_summary:
+        print(f"     - {code} {name} {price}")
+    if failed:
+        print(f"  ❌ 失敗: {len(failed)} 銘柄")
+        for f in failed:
+            print(f"     - {f['code']}  {f['error']}")
+    else:
+        print("  ❌ 失敗: 0 銘柄")
+
+    _print_step("5. CSV保存")
+    if success_rows:
+        write_csv(success_rows, OUTPUT_CSV)
+    else:
+        print(f"⚠ 成功銘柄ゼロのため {OUTPUT_CSV.name} は出力しません")
+    if failed:
+        write_failed_csv(failed, FAILED_CSV)
+    else:
+        # 失敗ゼロなら既存failed CSVは削除して状態を一致させる (任意)
+        if FAILED_CSV.exists():
+            try:
+                FAILED_CSV.unlink()
+                print(f"🧹 失敗ゼロのため旧 {FAILED_CSV.name} を削除しました")
+            except Exception:
+                pass
+
+    if not success_rows and failed:
+        print("\n❌ すべての銘柄が失敗しました")
         return 1
-
-    _print_step("4. CSV保存")
-    write_csv(rows, OUTPUT_CSV)
 
     print("\n✅ 接続テスト完了")
     return 0

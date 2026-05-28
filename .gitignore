@@ -183,3 +183,4 @@ cython_debug/
 # 雛形 kabu_config.example.json はコミットOK・実体 kabu_config.json はNG
 kabu_config.json
 data/kabu_prices_test.csv
+data/kabu_prices_failed.csv
