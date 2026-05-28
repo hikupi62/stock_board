@@ -1753,6 +1753,37 @@ def _positions_editor_section() -> None:
 def page_settings() -> None:
     st.markdown("### ⚙️ Settings")
 
+    st.markdown("#### 📡 価格データ取得元 (Provider)")
+    # 既定はauto。kabu利用可ならauto/kabu_stationでkabu優先、Cloudではyfinanceへ自動fallback。
+    provider_options = ["auto", "kabu_station", "yfinance"]
+    current = st.session_state.get("provider_name", "auto")
+    if current not in provider_options:
+        current = "auto"
+    chosen = st.selectbox(
+        "Provider",
+        provider_options,
+        index=provider_options.index(current),
+        key="provider_name_select",
+        help="ローカルPCでkabuステーション起動中なら kabu_station / auto がおすすめ。Cloudではyfinance固定推奨。",
+    )
+    if chosen != st.session_state.get("provider_name"):
+        st.session_state["provider_name"] = chosen
+        # キャッシュをクリアして新providerで再取得させる
+        try:
+            fetch_one.clear()
+            fetch_history_cached.clear()
+        except Exception:
+            pass
+        st.rerun()
+    st.caption(
+        "- **auto** (推奨): kabuステーション → yfinance → manual の順で取得\n"
+        "- **kabu_station**: ローカルPCでkabuステーション起動中のみ使用可能 (米国株は自動でyfinanceへ)\n"
+        "- **yfinance**: Cloudでも使えるが遅延・証券会社画面と差異あり\n"
+        "- Cloud/スマホからは kabuステーションへ直接接続できないため、自動的にyfinanceへfallback\n"
+        "- 本アプリは閲覧専用です。**注文API (/sendorder, /cancelorder 等) は呼びません**"
+    )
+
+    st.markdown("---")
     st.markdown("#### 表示グループ")
     cols = st.columns(2)
     cols[0].checkbox("保有銘柄", value=True, key="show_holdings", disabled=True)
@@ -1851,6 +1882,61 @@ def schedule_autorefresh(interval_sec: int) -> None:
 # Main
 # =============================================================================
 
+def _save_kabu_latest_csv(prices: dict[str, PriceData],
+                          watch_df: pd.DataFrame,
+                          fetched_at: dt.datetime) -> None:
+    """kabu_station から取得できた銘柄を data/kabu_prices_latest.csv に保存。
+
+    - .gitignore対象 (ローカル中間ファイル・GitHubには上げない)
+    - 1銘柄も kabu source が無ければ何もしない (旧ファイルはそのまま)
+    - 失敗してもアプリ全体を落とさない
+    """
+    try:
+        out_path = DATA_DIR / "kabu_prices_latest.csv"
+        # watch_df から name 引き当て用辞書
+        name_by_code: dict[str, str] = {}
+        for _, r in watch_df.iterrows():
+            c = str(r.get("code", "")).strip()
+            n = str(r.get("name", "")).strip()
+            if c:
+                name_by_code[c] = n
+
+        rows: list[dict] = []
+        updated_iso = fetched_at.isoformat(timespec="seconds")
+        for code, p in prices.items():
+            if not p.ok or p.source != "kabu_station":
+                continue
+            name = name_by_code.get(str(code), "")
+            price_time = ""
+            if p.last_update is not None:
+                try:
+                    price_time = p.last_update.isoformat(timespec="seconds")
+                except Exception:
+                    price_time = ""
+            rows.append({
+                "code": str(code),
+                "name": name,
+                "price": "" if p.current_price is None else f"{p.current_price}",
+                "previous_close": "" if p.prev_close is None else f"{p.prev_close}",
+                "change": "" if p.change is None else f"{p.change:.2f}",
+                "change_pct": "" if p.change_pct is None else f"{p.change_pct:.4f}",
+                "volume": "" if p.volume is None else f"{p.volume}",
+                "price_time": price_time,
+                "source": "kabu_station",
+                "updated_at": updated_iso,
+            })
+        if not rows:
+            return
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        cols = ["code", "name", "price", "previous_close", "change", "change_pct",
+                "volume", "price_time", "source", "updated_at"]
+        df = pd.DataFrame(rows, columns=cols)
+        df.to_csv(out_path, index=False, encoding="utf-8-sig")
+    except Exception:
+        # 保存失敗でアプリを止めない
+        pass
+
+
 def main() -> None:
     # Home専用CSSを注入 (.home-tile-grid / .home-tile スコープのみ・グローバルCSSは当てない)
     inject_home_css()
@@ -1881,17 +1967,39 @@ def main() -> None:
     # アクティブな表示対象だけ価格取得 (除外グループは取得しない)
     visible = watch_df[(watch_df["is_active"] == 1) & (watch_df["group"] != GROUP_EXCLUDED)]
 
+    # Provider 選択 (Settings タブで切替・初期値 auto)
+    provider_name = st.session_state.get("provider_name", "auto")
+
     with st.spinner("価格データ取得中..."):
-        prices = fetch_all(visible, period="6mo", provider_name="yfinance")
+        prices = fetch_all(visible, period="6mo", provider_name=provider_name)
     # JSTで取得時刻を記録 (Streamlit CloudはUTC環境のため明示変換が必要)
     fetched_at = dt.datetime.now(JST)
 
     # ----- 価格データ鮮度表示 (ヘッダー直下に1か所だけ・タブを問わず共通) -----
     # 銘柄タイルやPortfolio表内には source / data_time を入れない。
+    # 実際に使われた source を集計して表記を決める。
+    n_kabu = sum(1 for p in prices.values() if p.ok and p.source == "kabu_station")
+    yfinance_sources = ("yfinance", "yfinance_5d", "fast_info", "info")
+    n_yf = sum(1 for p in prices.values() if p.ok and p.source in yfinance_sources)
+    n_manual = sum(1 for p in prices.values() if p.ok and p.source == "manual")
+
+    if n_kabu > 0 and n_yf == 0 and n_manual == 0:
+        freshness_label = "📡 kabuステーション価格"
+        freshness_note = "ローカルPC取得 (注文APIは呼びません)"
+    elif n_kabu == 0:
+        freshness_label = "📡 yfinance参考価格"
+        freshness_note = "証券会社画面と差異あり (最終判断は証券会社の正式画面で)"
+    else:
+        freshness_label = f"📡 価格データ: kabu優先 / yfinance fallback"
+        freshness_note = f"kabu {n_kabu} 銘柄 / yfinance {n_yf} 銘柄"
+        if n_manual:
+            freshness_note += f" / manual {n_manual} 銘柄"
     st.caption(
-        f"📡 yfinance参考価格 ｜ 最終取得 {fetched_at.strftime('%H:%M')} ｜ "
-        "証券会社画面と差異あり (最終判断は証券会社の正式画面で)"
+        f"{freshness_label} ｜ 最終取得 {fetched_at.strftime('%H:%M')} ｜ {freshness_note}"
     )
+
+    # kabu取得分だけ data/kabu_prices_latest.csv に保存 (.gitignore 対象・ローカル中間ファイル)
+    _save_kabu_latest_csv(prices, watch_df, fetched_at)
 
     # 取得失敗があってもHome画面トップに大きな警告は出さない (各タイル内に「取得失敗」と小さく表示する)。
 

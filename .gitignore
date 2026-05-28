@@ -184,3 +184,4 @@ cython_debug/
 kabu_config.json
 data/kabu_prices_test.csv
 data/kabu_prices_failed.csv
+data/kabu_prices_latest.csv

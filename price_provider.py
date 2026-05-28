@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 """Price provider abstraction for stock board.
 
-Initial implementation: YFinanceProvider only.
-Future: RakutenRSSProvider, TachibanaProvider can be added by subclassing PriceProvider.
+Providers:
+- YFinanceProvider (default, Cloud-safe・遅延)
+- KabuStationProvider (ローカルPC・kabuステーション API 経由・JP株のみ)
+- AutoProvider (kabu優先→yfinance fallback)
 
-CRITICAL: This module is read-only towards external services.
-- No order placement
-- No credentials stored
+CRITICAL — read-only / no orders / no credentials:
+- No order placement (/sendorder /cancelorder /orders /positions /wallet 一切呼ばない)
+- No credentials stored on disk (kabu Token はメモリのみ)
 - yfinance is used for price/volume/chart data only (NOT for fundamentals)
+- kabu_station の base_url は localhost / 127.0.0.1 のみ
+- 使うkabuエンドポイントは /token と /board のみ (whitelist)
 """
 
 from __future__ import annotations
@@ -275,20 +279,378 @@ class YFinanceProvider(PriceProvider):
         return PriceData(symbol=symbol, error="fetch failed (all fallbacks exhausted)")
 
 
+# =============================================================================
+# kabuステーション Provider (ローカルPC・JP株のみ・/token と /board のみ)
+# =============================================================================
+#
+# 安全制約 (絶対):
+# - 注文系API (/sendorder /cancelorder /orders /positions /wallet) は呼ばない
+# - 使うエンドポイントは /token と /board のみ (whitelistで物理ガード)
+# - base_url は localhost / 127.0.0.1 のみ
+# - APIパスワードはコード/ファイル/メモリログに残さない
+# - Token はメモリのみ (ファイル保存禁止)
+# - 米国株は対象外 → caller (AutoProvider) で yfinance fallback
+
+_KABU_CONFIG_PATH = Path(__file__).resolve().parent / "kabu_config.json"
+_KABU_SAFE_ENDPOINTS = ("/token", "/board")
+
+
+def _load_kabu_config() -> Optional[dict]:
+    """kabu_config.json または環境変数 KABU_API_PASSWORD から設定を読む。
+
+    どちらも無ければ None を返し、KabuStationProvider は unavailable 扱い。
+    base_url は localhost / 127.0.0.1 以外を弾く (外部送信防止)。
+    """
+    import json as _json
+    import os as _os
+
+    cfg = {
+        "api_password": None,
+        "base_url": "http://localhost:18080/kabusapi",
+        "exchange": 1,
+        "request_timeout_sec": 10,
+        "retry_count": 3,
+        "retry_sleep_sec": 0.5,
+    }
+    if _KABU_CONFIG_PATH.exists():
+        try:
+            with _KABU_CONFIG_PATH.open("r", encoding="utf-8") as f:
+                file_cfg = _json.load(f)
+            for k in cfg.keys():
+                if k in file_cfg and file_cfg[k] not in (None, ""):
+                    cfg[k] = file_cfg[k]
+        except Exception:
+            pass
+
+    if not cfg["api_password"]:
+        env_pw = _os.environ.get("KABU_API_PASSWORD")
+        if env_pw:
+            cfg["api_password"] = env_pw
+
+    if not cfg["api_password"] or cfg["api_password"] == "ここにkabuステーションAPIパスワード":
+        return None
+
+    base = str(cfg["base_url"] or "").strip()
+    if not (base.startswith("http://localhost") or base.startswith("http://127.0.0.1")):
+        # 外部URLは絶対に許可しない
+        return None
+    return cfg
+
+
+class KabuStationProvider(PriceProvider):
+    """kabuステーション API 経由のローカル価格Provider。
+
+    - 取得: GET /board/{symbol}@{exchange} のみ (snapshot)
+    - 認証: POST /token (1回・トークンはメモリのみ)
+    - 米国株 (market != "JP") は即 unavailable を返し、callerでyfinance fallbackさせる
+    - チャート用 history は返さない (履歴は yfinance に任せる)
+    """
+
+    name = "kabu_station"
+
+    def __init__(self) -> None:
+        self._cfg = _load_kabu_config()
+        self._token: Optional[str] = None
+        self._token_err: Optional[str] = None
+
+    @property
+    def available(self) -> bool:
+        """kabu_config.json 等が読めて localhost URL ならTrue。"""
+        return self._cfg is not None
+
+    def yf_symbol(self, code: str, market: str) -> str:
+        # 抽象クラス互換のためのダミー (kabuはcodeをそのまま使う)
+        code = str(code).strip()
+        return code
+
+    def fetch(self, code: str, market: str, period: str = "6mo") -> PriceData:
+        return self.fetch_history(code, market, period=period, interval="1d")
+
+    def _safe_check(self, url: str) -> None:
+        """whitelist外URLは物理的に拒否 (RuntimeError)。"""
+        if not any(seg in url for seg in _KABU_SAFE_ENDPOINTS):
+            raise RuntimeError(f"kabu provider: refusing unsafe endpoint: {url}")
+
+    def _http_post(self, url: str, body: dict, timeout: int) -> tuple[int, dict]:
+        self._safe_check(url)
+        import json as _json
+        from urllib import error as _urlerr
+        from urllib import request as _urlreq
+        data = _json.dumps(body).encode("utf-8")
+        req = _urlreq.Request(url, data=data,
+                               headers={"Content-Type": "application/json"},
+                               method="POST")
+        try:
+            with _urlreq.urlopen(req, timeout=timeout) as resp:
+                payload = resp.read().decode("utf-8")
+                return resp.status, _json.loads(payload) if payload else {}
+        except _urlerr.HTTPError as e:
+            try:
+                p = e.read().decode("utf-8")
+                return e.code, _json.loads(p) if p else {"error": str(e)}
+            except Exception:
+                return e.code, {"error": str(e)}
+
+    def _http_get(self, url: str, token: str, timeout: int) -> tuple[int, dict]:
+        self._safe_check(url)
+        import json as _json
+        from urllib import error as _urlerr
+        from urllib import request as _urlreq
+        req = _urlreq.Request(
+            url,
+            headers={"X-API-KEY": token, "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with _urlreq.urlopen(req, timeout=timeout) as resp:
+                payload = resp.read().decode("utf-8")
+                return resp.status, _json.loads(payload) if payload else {}
+        except _urlerr.HTTPError as e:
+            try:
+                p = e.read().decode("utf-8")
+                return e.code, _json.loads(p) if p else {"error": str(e)}
+            except Exception:
+                return e.code, {"error": str(e)}
+
+    def _get_token(self) -> Optional[str]:
+        """Tokenをメモリキャッシュから返す。なければ /token で取得。"""
+        if self._token:
+            return self._token
+        if not self._cfg:
+            return None
+        url = str(self._cfg["base_url"]).rstrip("/") + "/token"
+        try:
+            status, body = self._http_post(
+                url,
+                {"APIPassword": self._cfg["api_password"]},
+                timeout=int(self._cfg["request_timeout_sec"]),
+            )
+        except Exception as e:
+            self._token_err = f"token error: {e.__class__.__name__}"
+            return None
+        if status == 200 and isinstance(body, dict) and body.get("Token"):
+            self._token = str(body["Token"])
+            return self._token
+        self._token_err = f"token HTTP {status}"
+        return None
+
+    def _invalidate_token(self) -> None:
+        self._token = None
+
+    def fetch_history(self, code: str, market: str, period: str = "6mo",
+                      interval: str = "1d") -> PriceData:
+        """kabuステーションは snapshot 専用。historyは返さない (callerが yfinance に回す想定)。"""
+        import socket as _socket
+        import time as _time
+        from urllib import error as _urlerr
+
+        code = str(code).strip()
+        market_u = (market or "").upper()
+
+        # 米国株はkabu対象外 (caller側でyfinance fallbackさせる)
+        if market_u != "JP":
+            return PriceData(
+                symbol=code,
+                error="kabu_station: JP only",
+                source="kabu_station_skip",
+            )
+
+        if not self._cfg:
+            return PriceData(
+                symbol=code,
+                error="kabu_station: not configured (use yfinance)",
+                source="kabu_station_unavail",
+            )
+
+        token = self._get_token()
+        if not token:
+            return PriceData(
+                symbol=code,
+                error=f"kabu_station: {self._token_err or 'token unavailable'}",
+                source="kabu_station_unavail",
+            )
+
+        exchange = int(self._cfg.get("exchange", 1))
+        url = f"{str(self._cfg['base_url']).rstrip('/')}/board/{code}@{exchange}"
+        timeout = int(self._cfg["request_timeout_sec"])
+        retry_count = max(1, int(self._cfg["retry_count"]))
+        retry_sleep = float(self._cfg["retry_sleep_sec"])
+
+        last_err = "unknown"
+        for attempt in range(1, retry_count + 1):
+            try:
+                status, body = self._http_get(url, token, timeout=timeout)
+            except (_socket.timeout, TimeoutError) as e:
+                last_err = f"timeout: {e.__class__.__name__}"
+                if attempt < retry_count:
+                    _time.sleep(retry_sleep)
+                    continue
+                return PriceData(symbol=code, error=last_err, source="kabu_station_fail")
+            except _urlerr.URLError as e:
+                reason = str(getattr(e, "reason", e))
+                last_err = f"urlerror: {reason}"
+                if "timed out" in reason.lower() and attempt < retry_count:
+                    _time.sleep(retry_sleep)
+                    continue
+                # kabuステーション未起動 → unavail (callerでyfinanceへ)
+                return PriceData(
+                    symbol=code, error=last_err, source="kabu_station_unavail",
+                )
+            except Exception as e:
+                last_err = f"{e.__class__.__name__}: {e}"
+                return PriceData(symbol=code, error=last_err, source="kabu_station_fail")
+
+            if status == 200 and isinstance(body, dict):
+                return self._board_to_price(body, code)
+            if status in (401, 403):
+                # Token失効の可能性 → 1回だけ再取得
+                if attempt == 1:
+                    self._invalidate_token()
+                    new_t = self._get_token()
+                    if new_t:
+                        token = new_t
+                        continue
+                return PriceData(
+                    symbol=code, error=f"HTTP {status}", source="kabu_station_fail",
+                )
+            if status == 404:
+                return PriceData(
+                    symbol=code, error="HTTP 404", source="kabu_station_fail",
+                )
+            if (status == 429 or 500 <= status < 600) and attempt < retry_count:
+                _time.sleep(retry_sleep)
+                last_err = f"HTTP {status}"
+                continue
+            return PriceData(
+                symbol=code, error=f"HTTP {status}", source="kabu_station_fail",
+            )
+
+        return PriceData(symbol=code, error=last_err, source="kabu_station_fail")
+
+    @staticmethod
+    def _board_to_price(body: dict, code: str) -> PriceData:
+        try:
+            from zoneinfo import ZoneInfo
+            _JST = ZoneInfo("Asia/Tokyo")
+        except Exception:
+            _JST = dt.timezone(dt.timedelta(hours=9), "JST")
+
+        price = body.get("CurrentPrice")
+        prev = body.get("PreviousClose")
+        vol = body.get("TradingVolume")
+        ptime = body.get("CurrentPriceTime")
+
+        # data_time をJSTのdatetimeに正規化
+        last_update: Optional[dt.datetime] = None
+        if ptime:
+            try:
+                t = dt.datetime.fromisoformat(str(ptime))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=_JST)
+                last_update = t.astimezone(_JST)
+            except Exception:
+                last_update = None
+
+        if price is None:
+            return PriceData(symbol=code, error="no price", source="kabu_station_fail")
+        try:
+            cur = float(price)
+        except Exception:
+            return PriceData(symbol=code, error="invalid price", source="kabu_station_fail")
+
+        prev_f: Optional[float] = None
+        try:
+            prev_f = float(prev) if prev is not None else None
+        except Exception:
+            prev_f = None
+        chg = (cur - prev_f) if prev_f not in (None, 0) else None
+        chg_pct = ((cur / prev_f) - 1) * 100 if prev_f not in (None, 0) else None
+
+        vol_f: Optional[float] = None
+        try:
+            vol_f = float(vol) if vol is not None else None
+        except Exception:
+            vol_f = None
+
+        return PriceData(
+            symbol=code,
+            current_price=cur,
+            prev_close=prev_f,
+            change=chg,
+            change_pct=chg_pct,
+            volume=vol_f,
+            last_update=last_update,
+            source="kabu_station",
+        )
+
+
+# =============================================================================
+# Auto Provider (kabu優先 + yfinance fallback)
+# =============================================================================
+
+class AutoProvider(PriceProvider):
+    """auto: snapshotはkabu→yfinance、chartは常にyfinance (kabuに履歴なし)。
+
+    Cloud/スマホ環境では kabu_config.json が無いため kabu.available=False となり、
+    透過的に yfinance のみが使われる。
+    """
+
+    name = "auto"
+
+    def __init__(self) -> None:
+        self.kabu = KabuStationProvider()
+        self.yf = YFinanceProvider()
+
+    @property
+    def kabu_available(self) -> bool:
+        return self.kabu.available
+
+    def yf_symbol(self, code: str, market: str) -> str:
+        return self.yf.yf_symbol(code, market)
+
+    def fetch(self, code: str, market: str, period: str = "6mo") -> PriceData:
+        # snapshot用パス: JP株かつkabu利用可なら kabu優先
+        market_u = (market or "").upper()
+        if market_u == "JP" and self.kabu.available:
+            r = self.kabu.fetch(code, market, period=period)
+            if r.ok:
+                return r
+        return self.yf.fetch(code, market, period=period)
+
+    def fetch_history(self, code: str, market: str, period: str = "6mo",
+                      interval: str = "1d") -> PriceData:
+        """charts需要 (60m/1d/1wk等のhistory) は常にyfinance。
+
+        kabuステーションはsnapshotのみで履歴を返さないため、チャート描画はyfinance必須。
+        snapshot用途 (period='6mo' & interval='1d') でも fetch() を経由しない直接呼び出しは
+        yfinanceに任せる方が安全。
+        """
+        # snapshot相当の呼び出しなら kabu試行
+        market_u = (market or "").upper()
+        if (interval == "1d" and period == "6mo"
+                and market_u == "JP" and self.kabu.available):
+            r = self.kabu.fetch_history(code, market, period=period, interval=interval)
+            if r.ok:
+                return r
+        return self.yf.fetch_history(code, market, period=period, interval=interval)
+
+
 # Convenience factory ----------------------------------------------------------
 
-def get_provider(name: str = "yfinance") -> PriceProvider:
+def get_provider(name: str = "auto") -> PriceProvider:
     """Return a provider instance by name.
 
-    Currently only "yfinance" is implemented. Future names:
-    - "rakuten_rss" -> RakutenRSSProvider
-    - "tachibana"   -> TachibanaProvider
+    - "yfinance"     -> 純粋にyfinanceのみ (Cloud-safe)
+    - "kabu_station" -> kabu優先 + yfinance fallback (チャート崩壊防止のためAutoProvider相当)
+    - "auto"         -> kabu優先 + yfinance fallback (デフォルト)
     """
-    name = (name or "yfinance").lower()
+    name = (name or "auto").lower()
     if name == "yfinance":
         return YFinanceProvider()
-    # Fallback to yfinance with a notice
-    return YFinanceProvider()
+    if name in ("kabu_station", "auto"):
+        return AutoProvider()
+    # 未知の名前はautoで安全側に
+    return AutoProvider()
 
 
 # Symbol name lookup -----------------------------------------------------------

@@ -364,6 +364,52 @@ code,name,market,sector,note
 4. **通知機能追加** — 指定価格到達でPush通知 (FCM等)
 5. **為替換算追加** — 別枠USD銘柄のJPY換算表示
 
+## 📡 価格データ Provider (yfinance / kabu_station / auto)
+
+ローカルPCで kabuステーション API が使える場合、yfinance より精度の高い価格を取得できます。本アプリは3つの Provider を切替可能:
+
+| Provider | 取得経路 | 環境 | 用途 |
+|---|---|---|---|
+| `yfinance` | yfinance API (6段fallback: history → 5d → fast_info → info → manual → fail) | Cloud / ローカル | 既定の遅延/準リアルタイム |
+| `kabu_station` | kabuステーション `/token` + `/board` (snapshot) ・米国株は yfinance | **ローカルPCのみ** | 証券会社画面に近い価格・JP株のみ |
+| `auto` (推奨) | kabu_station → yfinance fallback | 両対応 | Cloud では yfinance のみ・ローカルでは kabu 優先 |
+
+### Provider 切替方法
+1. アプリ起動 → **Settings タブ** → 「📡 価格データ取得元 (Provider)」 selectbox
+2. `auto` / `kabu_station` / `yfinance` から選択 → キャッシュクリア + 再取得
+3. ヘッダー直下のキャプションが選択 provider に応じて変化:
+   - kabu のみ: `📡 kabuステーション価格 ｜ 最終取得 HH:MM ｜ ローカルPC取得 (注文APIは呼びません)`
+   - yfinance のみ: `📡 yfinance参考価格 ｜ 最終取得 HH:MM ｜ 証券会社画面と差異あり`
+   - 混在 (auto時の典型): `📡 価格データ: kabu優先 / yfinance fallback ｜ 最終取得 HH:MM ｜ kabu 13 銘柄 / yfinance 3 銘柄`
+
+### `kabu_station` / `auto` の前提
+- auカブコム証券口座 + kabuステーション (Windows) インストール
+- kabuステーション本体を **起動 + ログイン済**
+- 「ツール」→「API設定」で **API利用ON**
+- `kabu_config.json` 作成 (`kabu_config.example.json` をコピー → `api_password` 設定)
+- `kabu_config.json` は `.gitignore` 済 → **GitHub には絶対に上がらない**
+
+### Cloud/スマホ環境での挙動
+- Streamlit Community Cloud は Linux 環境で kabuステーションへ直接アクセス不可
+- `auto` を選択していても `kabu_config.json` が無いため `kabu.available = False` となり、**透過的に yfinance のみ** が使われる
+- 将来は `data/kabu_prices_latest.csv` をローカルでcommit&pushしてCloud側で読む方式を検討 (今回は未実装)
+
+### kabu価格のローカル保存 (`data/kabu_prices_latest.csv`)
+- `auto` または `kabu_station` 選択時、**kabu_station から取得できた銘柄だけ** をCSV保存
+- 列: `code,name,price,previous_close,change,change_pct,volume,price_time,source,updated_at`
+- `.gitignore` 済 (ローカル中間ファイル・GitHubには上げない)
+- 用途: 将来 Cloud/スマホへ価格連携するための中間ファイル
+
+### Provider側の安全装置
+- 使うkabuエンドポイントは `/token` と `/board` のみ (whitelist `_KABU_SAFE_ENDPOINTS` で物理ガード)
+- `base_url` は `http://localhost` / `http://127.0.0.1` のみ許可 (`_load_kabu_config` で弾く)
+- API パスワードは print / markdown / log に絶対出さない
+- Token はメモリのみ (`self._token`) ・ファイル保存しない
+- 米国株 (market != "JP") は kabu 側で即 `source="kabu_station_skip"` → caller (AutoProvider) で yfinance fallback
+- 1銘柄失敗してもアプリ全体を落とさない (各銘柄独立 try/except + retry 3回)
+- チャート用 history (`interval != "1d"` または `period != "6mo"`) は **常に yfinance** (kabu は snapshot のみで history を返さないため)
+- **注文API (`/sendorder` `/cancelorder` `/orders` `/positions` `/wallet`) は関数として存在しない**
+
 ## 🧪 kabuステーションAPI 接続テスト (standalone・実験中)
 
 yfinance価格と証券会社画面で乖離があるため、auカブコム証券「kabuステーションAPI」から **価格取得のみ** を試すための独立スクリプトを同梱しています。
