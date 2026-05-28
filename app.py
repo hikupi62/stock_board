@@ -349,7 +349,7 @@ def mini_chart(price: PriceData, height: int = 120) -> None:
 
 # 足種選択肢: ラベル → (interval, period, period_label)
 INTERVAL_OPTIONS: dict[str, tuple[str, str, str]] = {
-    "1時間足": ("60m", "10d", "10日"),
+    "1時間足": ("60m", "5d", "5日"),
     "日足": ("1d", "3mo", "3ヶ月"),
     "週足": ("1wk", "2y", "2年"),
 }
@@ -395,40 +395,81 @@ def render_interval_chart(code: str, market: str, name: str, currency: str,
         import plotly.graph_objects as go
 
         hist = price.history
-        # OHLC が揃っていればローソク足・欠ければ終値折れ線にfallback
-        ohlc_cols = ["Open", "High", "Low", "Close"]
-        has_ohlc = (
-            all(c in hist.columns for c in ohlc_cols)
-            and not any(hist[c].dropna().empty for c in ohlc_cols)
-        )
-
         fig = go.Figure()
-        if has_ohlc:
-            # ローソク足 (上昇=青 / 下降=赤 でアプリ配色に統一)
-            fig.add_trace(go.Candlestick(
-                x=hist.index,
-                open=hist["Open"], high=hist["High"],
-                low=hist["Low"], close=hist["Close"],
-                increasing_line_color="#2563eb",
-                decreasing_line_color="#dc2626",
-                increasing_fillcolor="#2563eb",
-                decreasing_fillcolor="#dc2626",
-                name="価格",
-            ))
-            fig.update_layout(xaxis_rangeslider_visible=False)
-        else:
-            # OHLC欠損 → 終値折れ線
+        is_hourly = (interval == "60m")
+        fallback_line = False  # OHLC欠損による折れ線表示か (日足/週足のみ)
+
+        if is_hourly:
+            # ----- 1時間足: Close線グラフ + 連番index -----
+            # 実時間x軸だと夜間/土日/昼休み/非取引時間の空白が残り飛び飛びに見えるため、
+            # 連番indexをx軸にして空白を詰める。tickは日付が変わる地点に間引いて配置。
+            h = hist.reset_index()
+            dt_series = h[h.columns[0]]  # reset_indexで先頭列が元の日時index
+            n = len(h)
+            xs = list(range(n))
+            customdata = []
+            for i in range(n):
+                ti = dt_series.iloc[i]
+                try:
+                    customdata.append(f"{ti.month}/{ti.day} {ti.hour:02d}:{ti.minute:02d}")
+                except Exception:
+                    customdata.append(str(ti))
             fig.add_trace(go.Scatter(
-                x=hist.index, y=hist["Close"],
-                mode="lines", line=dict(width=1.6),
+                x=xs, y=h["Close"],
+                mode="lines", line=dict(color="#2563eb", width=2),
                 name="終値",
-                hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:,.2f}<extra></extra>",
+                customdata=customdata,
+                hovertemplate="%{customdata}<br>%{y:,.2f}<extra></extra>",
             ))
+            # 日付が変わる地点にtick (短いラベル "M/D")
+            tickvals, ticktext = [], []
+            prev_day = None
+            for i in range(n):
+                ti = dt_series.iloc[i]
+                try:
+                    day = (ti.year, ti.month, ti.day)
+                    if day != prev_day:
+                        tickvals.append(i)
+                        ticktext.append(f"{ti.month}/{ti.day}")
+                        prev_day = day
+                except Exception:
+                    continue
+            xaxis_cfg = dict(showgrid=True, gridcolor="#eef1f5",
+                             tickvals=tickvals, ticktext=ticktext)
+        else:
+            # ----- 日足/週足: ローソク足 (OHLC欠損時のみ折れ線fallback) -----
+            ohlc_cols = ["Open", "High", "Low", "Close"]
+            has_ohlc = (
+                all(c in hist.columns for c in ohlc_cols)
+                and not any(hist[c].dropna().empty for c in ohlc_cols)
+            )
+            if has_ohlc:
+                fig.add_trace(go.Candlestick(
+                    x=hist.index,
+                    open=hist["Open"], high=hist["High"],
+                    low=hist["Low"], close=hist["Close"],
+                    increasing_line_color="#2563eb",
+                    decreasing_line_color="#dc2626",
+                    increasing_fillcolor="#2563eb",
+                    decreasing_fillcolor="#dc2626",
+                    name="価格",
+                ))
+            else:
+                fallback_line = True
+                fig.add_trace(go.Scatter(
+                    x=hist.index, y=hist["Close"],
+                    mode="lines", line=dict(width=1.6),
+                    name="終値",
+                    hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f}<extra></extra>",
+                ))
+            # ローソク足のrangesliderは非表示 (xaxis_cfgに含めて最終update_layoutで反映)
+            xaxis_cfg = dict(showgrid=True, gridcolor="#eef1f5",
+                             rangeslider=dict(visible=False))
 
         fig.update_layout(
             height=height,
             margin=dict(l=12, r=12, t=12, b=28),
-            xaxis=dict(showgrid=True, gridcolor="#eef1f5"),
+            xaxis=xaxis_cfg,
             yaxis=dict(showgrid=True, gridcolor="#eef1f5", side="right"),
             showlegend=False,
             paper_bgcolor="#ffffff",
@@ -436,7 +477,7 @@ def render_interval_chart(code: str, market: str, name: str, currency: str,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        if not has_ohlc:
+        if fallback_line:
             st.caption("OHLCデータなしのため折れ線表示")
 
         # 現在値表示
@@ -651,8 +692,8 @@ def inject_home_css() -> None:
         /* ===== ヘッダー上部の余白を少しだけ詰める (上部が切れない範囲) ===== */
         /* padding-top のみ調整・他のpadding/display/gridには一切触れない */
         @media (min-width: 641px) {
-            /* PC: Streamlit標準(約6rem)は広すぎるので 2.2rem に */
-            .stApp .block-container { padding-top: 2.2rem !important; }
+            /* PC: Streamlit標準(約6rem)は広すぎ・2.2remは詰めすぎたので 3.2rem に */
+            .stApp .block-container { padding-top: 3.2rem !important; }
         }
         @media (max-width: 640px) {
             /* スマホ: さらに詰める */
