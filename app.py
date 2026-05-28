@@ -640,13 +640,25 @@ def inject_home_css() -> None:
 
     重要:
     - グローバルCSS (div[data-testid="stHorizontalBlock"] や .stButton 全体) は当てない
-    - block-container 全体のpadding/marginにもCSSを当てない (Streamlit標準のまま)
-    - 当てるのは .home-tile-grid / .home-tile / .home-tile-* スコープのみ
-    - これにより Portfolio / Settings タブが一切影響を受けない
+    - block-container は **上部padding(padding-top)のみ** 控えめに詰める
+      (レイアウト崩壊の原因になる left/right/bottom や display は触らない)
+    - その他は .home-tile-grid / .home-tile / .home-tile-* スコープのみ
+    - これにより Portfolio / Settings タブのレイアウトは崩れない
     """
     st.markdown(
         """
         <style>
+        /* ===== ヘッダー上部の余白を少しだけ詰める (上部が切れない範囲) ===== */
+        /* padding-top のみ調整・他のpadding/display/gridには一切触れない */
+        @media (min-width: 641px) {
+            /* PC: Streamlit標準(約6rem)は広すぎるので 2.2rem に */
+            .stApp .block-container { padding-top: 2.2rem !important; }
+        }
+        @media (max-width: 640px) {
+            /* スマホ: さらに詰める */
+            .stApp .block-container { padding-top: 1.0rem !important; }
+        }
+
         /* ===== Home タイルグリッド (このクラス配下にしか影響しない) ===== */
         .home-tile-grid {
             display: grid;
@@ -954,15 +966,79 @@ def _render_home_chart(sel_code: str, watch_df: pd.DataFrame,
         link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(sel_code, sel_market)})")
 
 
-def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    """Home: PC=左タイル/右チャートの2カラム、スマホ=タイル下にチャート。
+HOME_SORT_OPTIONS = [
+    "登録順",
+    "騰落率 高い順",
+    "騰落率 低い順",
+    "価格 高い順",
+    "価格 低い順",
+    "銘柄名順",
+]
 
-    - 左: 保有銘柄 → Watch銘柄 のタイルグリッド (.home-tile-grid スコープ)
-    - 右 (PC) / 下 (スマホ): 選択中銘柄のローソク足チャート
+
+def _sort_home_sub(sub: pd.DataFrame, prices: dict[str, PriceData],
+                   sort_mode: str) -> pd.DataFrame:
+    """Home用に1グループ (保有/Watch) 内で並び替える。
+
+    - 登録順: watchlist.csv の順 (そのまま返す)
+    - 騰落率/価格: prices から値を引いてソート (取得失敗は常に最後)
+    - 銘柄名順: name 昇順 (取得失敗は最後)
+    - Portfolio の並び替えとは独立 (Homeタイルにのみ適用)
+    """
+    if sort_mode == "登録順" or sub.empty or sort_mode not in HOME_SORT_OPTIONS:
+        return sub
+
+    def _info(row) -> tuple[bool, Optional[float], Optional[float], str]:
+        code = str(row.get("code", "")).strip()
+        p = prices.get(code)
+        ok = bool(p and p.ok and p.current_price is not None)
+        cp = p.change_pct if (p and p.ok and p.change_pct is not None) else None
+        price = p.current_price if (p and p.ok and p.current_price is not None) else None
+        name = str(row.get("name", "")).strip()
+        return ok, cp, price, name
+
+    items = list(sub.iterrows())  # [(idx, Series), ...] — sorted()は安定なので登録順は保たれる
+
+    if sort_mode == "騰落率 高い順":
+        def key(it):
+            ok, cp, _price, _name = _info(it[1])
+            valid = ok and cp is not None
+            return (0 if valid else 1, -(cp if cp is not None else 0.0))
+    elif sort_mode == "騰落率 低い順":
+        def key(it):
+            ok, cp, _price, _name = _info(it[1])
+            valid = ok and cp is not None
+            return (0 if valid else 1, (cp if cp is not None else 0.0))
+    elif sort_mode == "価格 高い順":
+        def key(it):
+            ok, _cp, price, _name = _info(it[1])
+            valid = ok and price is not None
+            return (0 if valid else 1, -(price if price is not None else 0.0))
+    elif sort_mode == "価格 低い順":
+        def key(it):
+            ok, _cp, price, _name = _info(it[1])
+            valid = ok and price is not None
+            return (0 if valid else 1, (price if price is not None else 0.0))
+    elif sort_mode == "銘柄名順":
+        def key(it):
+            ok, _cp, _price, name = _info(it[1])
+            return (0 if ok else 1, name)
+    else:
+        return sub
+
+    items_sorted = sorted(items, key=key)
+    sorted_rows = [it[1] for it in items_sorted]
+    return pd.DataFrame(sorted_rows).reset_index(drop=True)
+
+
+def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
+    """Home: 未選択時は全幅タイル / 銘柄選択時のみPC左タイル・右チャートの2カラム。
+
     - 各タイル: 銘柄名 / 現在価格 / 前日騰落率 (青/赤/グレー)
     - 1687 ETF は yfinance fallback → manual_prices.csv で価格表示
     - タイルクリックで開閉 (同じ銘柄再クリックで閉じる)・現在値kabu優先/履歴yfinance
-    - st.columns はスマホでは自動的に縦積みになり、タイルの下にチャートが出る
+    - Home上部に並び替えselectbox (Portfolioとは別物・タイルのみに適用)
+    - スマホでは選択時2カラムが縦積みになり、タイルの下にチャートが出る
     """
     # クエリパラメータから選択中銘柄を取得 (HTMLタイルの <a href="?select="> がクリック信号)
     try:
@@ -978,28 +1054,38 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     # 同じ銘柄の再クリックは _tile_card_html 側で href="?select=" になり閉じる。
     st.session_state["open_chart_code"] = selected_code
 
-    # PC: 左55-60%にタイル / 右40-45%にチャート。
-    # スマホ: Streamlitのレスポンシブで縦積みになり、タイルの下にチャートが出る。
-    left_col, right_col = st.columns([0.58, 0.42], gap="medium")
+    valid_selection = (
+        selected_code is not None
+        and str(selected_code) in watch_df["code"].astype(str).values
+    )
 
-    with left_col:
+    # Home並び替え (Portfolioとは別物・小さめselectbox)
+    sort_col, _spacer = st.columns([1.2, 2.8])
+    with sort_col:
+        sort_mode = st.selectbox(
+            "並び替え", HOME_SORT_OPTIONS, index=0, key="home_sort_mode",
+        )
+
+    def _render_tiles() -> None:
         for group_name in (GROUP_HOLD, GROUP_WATCH):
             sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
             if sub.empty:
                 continue
+            sub = _sort_home_sub(sub, prices, sort_mode)
             label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
             render_home_section(label, sub, prices, selected_code=selected_code)
 
-    with right_col:
-        valid_selection = (
-            selected_code is not None
-            and str(selected_code) in watch_df["code"].astype(str).values
-        )
-        if valid_selection:
+    if valid_selection:
+        # 選択時のみ2カラム (PC: 左タイル / 右チャート・スマホ: 縦積みでタイル下にチャート)
+        left_col, right_col = st.columns([0.58, 0.42], gap="medium")
+        with left_col:
+            _render_tiles()
+        with right_col:
             # 押された後にページ上部へ戻っても、右カラム上部にチャートが見える
             _render_home_chart(str(selected_code), watch_df, prices)
-        else:
-            st.caption("📊 銘柄をクリックするとチャートを表示します")
+    else:
+        # 未選択時: 全幅でタイルを敷き詰める (右カラム・説明文は出さない)
+        _render_tiles()
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
