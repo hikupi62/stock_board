@@ -179,3 +179,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# kabuステーションAPI接続設定 (APIパスワード含むため絶対にコミット禁止)
+# 雛形 kabu_config.example.json はコミットOK・実体 kabu_config.json はNG
+kabu_config.json
+data/kabu_prices_test.csv

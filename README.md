@@ -364,6 +364,63 @@ code,name,market,sector,note
 4. **通知機能追加** — 指定価格到達でPush通知 (FCM等)
 5. **為替換算追加** — 別枠USD銘柄のJPY換算表示
 
+## 🧪 kabuステーションAPI 接続テスト (standalone・実験中)
+
+yfinance価格と証券会社画面で乖離があるため、auカブコム証券「kabuステーションAPI」から **価格取得のみ** を試すための独立スクリプトを同梱しています。
+**既存ダッシュボード (`app.py` / `price_provider.py`) にはまだ組み込んでいません**。接続性が確認できてから次フェーズで統合検討します。
+
+### 絶対方針 (PRESERVE)
+
+- **自動発注機能は追加しない** (`/sendorder` / `/cancelorder` / `/orders` 等の注文系APIは絶対に呼ばない)
+- **証券会社ログイン情報を保存しない**
+- **APIパスワードをコードに直書きしない**
+- `kabu_config.json` は `.gitignore` 済 (GitHub には絶対に上げない)
+- `kabu_config.example.json` (プレースホルダ入り雛形) だけコミットOK
+
+### 前提
+
+- auカブコム証券口座 + kabuステーション (Windowsアプリ) をインストール済
+- kabuステーション本体を **起動 → ログイン済** であること
+- 「ツール」→「API設定」で **API利用をON** にしておくこと
+- ポート `18080` で待ち受けていること (デフォルト)
+
+### 実行手順
+
+1. 雛形をコピーして実体ファイルを作る:
+   ```powershell
+   copy kabu_config.example.json kabu_config.json
+   ```
+2. `kabu_config.json` を開き、`api_password` に実パスワードを入力 (この実体ファイルは `.gitignore` 済)
+   - パスワードをファイルに置きたくない場合は、環境変数で渡してもOK:
+     ```powershell
+     $env:KABU_API_PASSWORD = "your-password"
+     ```
+3. 実行:
+   ```powershell
+   cd C:\stocks\app\stock_board
+   py kabu_test.py
+   ```
+
+### 成功時
+
+- 標準出力に Token取得成功 (一部マスク) + 各銘柄の `Symbol / SymbolName / CurrentPrice / CurrentPriceTime / PreviousClose / TradingVolume / ExchangeName` が表示される
+- `data/kabu_prices_test.csv` が生成される (列: `code,name,price,previous_close,change,change_pct,volume,price_time,source,updated_at` ・ source=`kabu_station`)
+
+### よくあるエラー
+
+| 症状 | 対処 |
+|---|---|
+| `kabuステーションAPIに接続できません` | kabuステーション本体を起動 → ログイン → API設定ON |
+| `APIパスワードが違う可能性 (HTTP 401)` | パスワード再入力 / 大文字小文字確認 |
+| `銘柄が見つかりません (HTTP 404)` | 銘柄コードを4桁数字で・`exchange` 1=東証 確認 |
+
+### スクリプトの安全装置
+
+- 呼び出すURLは `/token` または `/board` を含むパスに限定 (whitelist方式)
+- `base_url` は `http://localhost` / `http://127.0.0.1` のみ許可 (外部送信防止)
+- パスワードは `print()` しない (Token表示も先頭6字+末尾3字のみ・他はマスク)
+- 注文系・残高照会系APIは関数自体が存在しない
+
 ## ▶️ 次に楽天RSS版へ移行する場合
 
 `price_provider.py` に `RakutenRSSProvider(PriceProvider)` クラスを追加：

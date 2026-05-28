@@ -1,0 +1,6 @@
+{
+  "api_password": "ここにkabuステーションAPIパスワード",
+  "base_url": "http://localhost:18080/kabusapi",
+  "exchange": 1,
+  "symbols": ["9433", "8020", "2780"]
+}
