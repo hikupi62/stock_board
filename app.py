@@ -349,9 +349,9 @@ def mini_chart(price: PriceData, height: int = 120) -> None:
 
 # 足種選択肢: ラベル → (interval, period, period_label)
 INTERVAL_OPTIONS: dict[str, tuple[str, str, str]] = {
-    "1時間足": ("60m", "30d", "30日"),
-    "日足": ("1d", "6mo", "半年"),
-    "週足": ("1wk", "3y", "3年"),
+    "1時間足": ("60m", "10d", "10日"),
+    "日足": ("1d", "3mo", "3ヶ月"),
+    "週足": ("1wk", "2y", "2年"),
 }
 
 
@@ -364,8 +364,8 @@ def fetch_history_cached(code: str, market: str, period: str, interval: str, pro
 def render_interval_chart(code: str, market: str, name: str, currency: str,
                           interval_label: str = "1時間足",
                           key_prefix: str = "chart",
-                          height: int = 360) -> None:
-    """1時間足/日足/週足 切替付きチャート (Home下部・Charts共通)。"""
+                          height: int = 460) -> None:
+    """1時間足/日足/週足 切替付きローソク足チャート (Home選択時・右カラム)。"""
     if interval_label not in INTERVAL_OPTIONS:
         interval_label = "日足"
     # 足種選択 UI
@@ -427,12 +427,12 @@ def render_interval_chart(code: str, market: str, name: str, currency: str,
 
         fig.update_layout(
             height=height,
-            margin=dict(l=6, r=6, t=6, b=16),
-            xaxis=dict(showgrid=True),
-            yaxis=dict(showgrid=True, side="right"),
+            margin=dict(l=12, r=12, t=12, b=28),
+            xaxis=dict(showgrid=True, gridcolor="#eef1f5"),
+            yaxis=dict(showgrid=True, gridcolor="#eef1f5", side="right"),
             showlegend=False,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
@@ -959,7 +959,7 @@ def _render_home_chart(sel_code: str, watch_df: pd.DataFrame,
             currency=sel_currency,
             interval_label="1時間足",
             key_prefix=f"home_sel_{sel_code}",
-            height=340,
+            height=460,
         )
         link_cols = st.columns(2)
         link_cols[0].markdown(f"[📊 Yahoo]({yahoo_link(sel_code, sel_market)})")
@@ -2093,7 +2093,9 @@ def main() -> None:
         st.markdown("#### 📈 Aさん株価ボード")
     with header_cols[1]:
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
-            fetch_one.clear()  # キャッシュクリア
+            # 価格キャッシュのみクリア。session_state (home_sort_mode 等) と
+            # URLクエリ (?select=) は触らないので、Home並び替え・選択中チャートは維持される。
+            fetch_one.clear()
             fetch_history_cached.clear()
             st.rerun()
     with header_cols[2]:
