@@ -1007,78 +1007,39 @@ def _render_home_chart(sel_code: str, watch_df: pd.DataFrame,
         link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(sel_code, sel_market)})")
 
 
-HOME_SORT_OPTIONS = [
-    "登録順",
-    "騰落率 高い順",
-    "騰落率 低い順",
-    "価格 高い順",
-    "価格 低い順",
-    "銘柄名順",
-]
+def _sort_home_by_change_pct_desc(sub: pd.DataFrame,
+                                  prices: dict[str, PriceData]) -> pd.DataFrame:
+    """Home用に1グループ (保有/Watch) 内を「騰落率 高い順」固定で並べる。
 
-
-def _sort_home_sub(sub: pd.DataFrame, prices: dict[str, PriceData],
-                   sort_mode: str) -> pd.DataFrame:
-    """Home用に1グループ (保有/Watch) 内で並び替える。
-
-    - 登録順: watchlist.csv の順 (そのまま返す)
-    - 騰落率/価格: prices から値を引いてソート (取得失敗は常に最後)
-    - 銘柄名順: name 昇順 (取得失敗は最後)
-    - Portfolio の並び替えとは独立 (Homeタイルにのみ適用)
+    - change_pct の降順 (高い銘柄が左上)
+    - 取得失敗・change_pct無しの銘柄は常に最後
+    - 毎回 最新prices を使って並べ替える (結果はcacheしない)
+    - Home は常に騰落率高い順なので並び替えUIは持たない
     """
-    if sort_mode == "登録順" or sub.empty or sort_mode not in HOME_SORT_OPTIONS:
+    if sub.empty:
         return sub
 
-    def _info(row) -> tuple[bool, Optional[float], Optional[float], str]:
+    def key(it):
+        row = it[1]
         code = str(row.get("code", "")).strip()
         p = prices.get(code)
-        ok = bool(p and p.ok and p.current_price is not None)
-        cp = p.change_pct if (p and p.ok and p.change_pct is not None) else None
-        price = p.current_price if (p and p.ok and p.current_price is not None) else None
-        name = str(row.get("name", "")).strip()
-        return ok, cp, price, name
+        ok = bool(p and p.ok and p.change_pct is not None)
+        cp = p.change_pct if ok else None
+        # 取得失敗/騰落率なしは最後 (第1キー=1)・有効は降順 (第2キー=-cp)
+        return (0 if ok else 1, -(cp if cp is not None else 0.0))
 
-    items = list(sub.iterrows())  # [(idx, Series), ...] — sorted()は安定なので登録順は保たれる
-
-    if sort_mode == "騰落率 高い順":
-        def key(it):
-            ok, cp, _price, _name = _info(it[1])
-            valid = ok and cp is not None
-            return (0 if valid else 1, -(cp if cp is not None else 0.0))
-    elif sort_mode == "騰落率 低い順":
-        def key(it):
-            ok, cp, _price, _name = _info(it[1])
-            valid = ok and cp is not None
-            return (0 if valid else 1, (cp if cp is not None else 0.0))
-    elif sort_mode == "価格 高い順":
-        def key(it):
-            ok, _cp, price, _name = _info(it[1])
-            valid = ok and price is not None
-            return (0 if valid else 1, -(price if price is not None else 0.0))
-    elif sort_mode == "価格 低い順":
-        def key(it):
-            ok, _cp, price, _name = _info(it[1])
-            valid = ok and price is not None
-            return (0 if valid else 1, (price if price is not None else 0.0))
-    elif sort_mode == "銘柄名順":
-        def key(it):
-            ok, _cp, _price, name = _info(it[1])
-            return (0 if ok else 1, name)
-    else:
-        return sub
-
-    items_sorted = sorted(items, key=key)
+    items_sorted = sorted(list(sub.iterrows()), key=key)  # sorted()は安定
     sorted_rows = [it[1] for it in items_sorted]
     return pd.DataFrame(sorted_rows).reset_index(drop=True)
 
 
 def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    """Home: 未選択時は全幅タイル / 銘柄選択時のみPC左タイル・右チャートの2カラム。
+    """Home: 常に「騰落率 高い順」で表示。未選択時は全幅タイル / 選択時のみ2カラム。
 
     - 各タイル: 銘柄名 / 現在価格 / 前日騰落率 (青/赤/グレー)
+    - 並び替えUIは持たない (常に各グループ内 change_pct 降順・取得失敗は最後)
     - 1687 ETF は yfinance fallback → manual_prices.csv で価格表示
     - タイルクリックで開閉 (同じ銘柄再クリックで閉じる)・現在値kabu優先/履歴yfinance
-    - Home上部に並び替えselectbox (Portfolioとは別物・タイルのみに適用)
     - スマホでは選択時2カラムが縦積みになり、タイルの下にチャートが出る
     """
     # クエリパラメータから選択中銘柄を取得 (HTMLタイルの <a href="?select="> がクリック信号)
@@ -1100,30 +1061,17 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
         and str(selected_code) in watch_df["code"].astype(str).values
     )
 
-    # Home並び替え (Portfolioとは別物・小さめselectbox)
-    # 注意: index= と key= の併用は「defaultとsession_stateの二重指定」となり、
-    # st.rerun() 直後に selectbox の戻り値が表示値とズレる原因になる。
-    # そのため index は使わず、session_state を一度だけ初期化する方式にする。
-    if "home_sort_mode" not in st.session_state:
-        st.session_state["home_sort_mode"] = HOME_SORT_OPTIONS[0]  # 初回のみ「登録順」
-    sort_col, _spacer = st.columns([1.2, 2.8])
-    with sort_col:
-        st.selectbox("並び替え", HOME_SORT_OPTIONS, key="home_sort_mode")
-    # 表示中の値を session_state から取得し、毎回この値で最新pricesを再ソートする。
-    sort_mode = st.session_state.get("home_sort_mode", "登録順")
-
-    # 手動更新直後の強制再ソートフラグ (補助)。
-    # _sort_home_sub は毎回 inline で最新pricesを使うため実質no-opだが、意図を明示。
-    st.session_state.pop("force_home_resort", None)
+    # 並び替えselectboxは廃止。Homeは常に騰落率高い順 (小さく注記のみ)。
+    st.caption("騰落率 高い順で表示")
 
     def _render_tiles() -> None:
-        # 毎回 watch_df + 最新prices + 現在のsort_mode から表示順を計算する
+        # 毎回 watch_df + 最新prices から「騰落率 高い順」で表示順を計算する
         # (並び替え済みDataFrameは session_state に保存・cacheしない)。
         for group_name in (GROUP_HOLD, GROUP_WATCH):
             sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
             if sub.empty:
                 continue
-            sub = _sort_home_sub(sub, prices, sort_mode)
+            sub = _sort_home_by_change_pct_desc(sub, prices)
             label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
             render_home_section(label, sub, prices, selected_code=selected_code)
 
@@ -2146,12 +2094,10 @@ def main() -> None:
     with header_cols[1]:
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
             # 価格キャッシュ (現在値・チャート履歴) のみクリアして最新価格を取り直す。
-            # session_state (home_sort_mode / open_chart_code / provider選択) と
-            # URLクエリ (?select=) は触らないので、Home並び替え・選択中チャートは維持される。
-            # Home表示順は cache していないため、rerun後に最新pricesで自動再ソートされる。
+            # session_state (open_chart_code / provider選択) と URLクエリ (?select=) は触らない。
+            # Home表示順は cache していないため、rerun後に最新pricesで常に騰落率高い順に再計算される。
             fetch_one.clear()
             fetch_history_cached.clear()
-            st.session_state["force_home_resort"] = True  # 補助フラグ (Home側でpopして再ソート明示)
             st.rerun()
     with header_cols[2]:
         interval = st.selectbox("自動更新", ["なし", "60秒", "180秒", "300秒"], index=0)
