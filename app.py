@@ -395,16 +395,39 @@ def render_interval_chart(code: str, market: str, name: str, currency: str,
         import plotly.graph_objects as go
 
         hist = price.history
+        # OHLC が揃っていればローソク足・欠ければ終値折れ線にfallback
+        ohlc_cols = ["Open", "High", "Low", "Close"]
+        has_ohlc = (
+            all(c in hist.columns for c in ohlc_cols)
+            and not any(hist[c].dropna().empty for c in ohlc_cols)
+        )
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist["Close"],
-            mode="lines", line=dict(width=1.6),
-            name="終値",
-            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:,.2f}<extra></extra>",
-        ))
+        if has_ohlc:
+            # ローソク足 (上昇=青 / 下降=赤 でアプリ配色に統一)
+            fig.add_trace(go.Candlestick(
+                x=hist.index,
+                open=hist["Open"], high=hist["High"],
+                low=hist["Low"], close=hist["Close"],
+                increasing_line_color="#2563eb",
+                decreasing_line_color="#dc2626",
+                increasing_fillcolor="#2563eb",
+                decreasing_fillcolor="#dc2626",
+                name="価格",
+            ))
+            fig.update_layout(xaxis_rangeslider_visible=False)
+        else:
+            # OHLC欠損 → 終値折れ線
+            fig.add_trace(go.Scatter(
+                x=hist.index, y=hist["Close"],
+                mode="lines", line=dict(width=1.6),
+                name="終値",
+                hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:,.2f}<extra></extra>",
+            ))
+
         fig.update_layout(
             height=height,
-            margin=dict(l=10, r=10, t=10, b=20),
+            margin=dict(l=6, r=6, t=6, b=16),
             xaxis=dict(showgrid=True),
             yaxis=dict(showgrid=True, side="right"),
             showlegend=False,
@@ -412,6 +435,9 @@ def render_interval_chart(code: str, market: str, name: str, currency: str,
             plot_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        if not has_ohlc:
+            st.caption("OHLCデータなしのため折れ線表示")
 
         # 現在値表示
         chg, color = fmt_change(price)
@@ -929,14 +955,14 @@ def _render_home_chart(sel_code: str, watch_df: pd.DataFrame,
 
 
 def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
-    """Home: 世界の株価風タイルグリッド (.home-tile-grid スコープ)。
+    """Home: PC=左タイル/右チャートの2カラム、スマホ=タイル下にチャート。
 
-    - 保有銘柄 → Watch銘柄 の順でタイル表示
+    - 左: 保有銘柄 → Watch銘柄 のタイルグリッド (.home-tile-grid スコープ)
+    - 右 (PC) / 下 (スマホ): 選択中銘柄のローソク足チャート
     - 各タイル: 銘柄名 / 現在価格 / 前日騰落率 (青/赤/グレー)
     - 1687 ETF は yfinance fallback → manual_prices.csv で価格表示
-    - 取得失敗があっても画面トップに大きな警告は出さない (タイル内に小さく "取得失敗")
-    - タイルクリックで開閉: クリックした銘柄が属するセクションの **タイル一覧直下** に
-      チャートが展開される (Home最下部固定はしない)。同じ銘柄を再クリックで閉じる。
+    - タイルクリックで開閉 (同じ銘柄再クリックで閉じる)・現在値kabu優先/履歴yfinance
+    - st.columns はスマホでは自動的に縦積みになり、タイルの下にチャートが出る
     """
     # クエリパラメータから選択中銘柄を取得 (HTMLタイルの <a href="?select="> がクリック信号)
     try:
@@ -952,17 +978,28 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     # 同じ銘柄の再クリックは _tile_card_html 側で href="?select=" になり閉じる。
     st.session_state["open_chart_code"] = selected_code
 
-    # 大きなタイトル・長い説明文は廃止 (上部はタイルに譲る)
-    for group_name in (GROUP_HOLD, GROUP_WATCH):
-        sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
-        if sub.empty:
-            continue
-        label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
-        render_home_section(label, sub, prices, selected_code=selected_code)
+    # PC: 左55-60%にタイル / 右40-45%にチャート。
+    # スマホ: Streamlitのレスポンシブで縦積みになり、タイルの下にチャートが出る。
+    left_col, right_col = st.columns([0.58, 0.42], gap="medium")
 
-        # このセクション内の銘柄が開かれているなら、タイル一覧の直下にチャートを展開
-        if selected_code and str(selected_code) in sub["code"].astype(str).values:
+    with left_col:
+        for group_name in (GROUP_HOLD, GROUP_WATCH):
+            sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
+            if sub.empty:
+                continue
+            label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
+            render_home_section(label, sub, prices, selected_code=selected_code)
+
+    with right_col:
+        valid_selection = (
+            selected_code is not None
+            and str(selected_code) in watch_df["code"].astype(str).values
+        )
+        if valid_selection:
+            # 押された後にページ上部へ戻っても、右カラム上部にチャートが見える
             _render_home_chart(str(selected_code), watch_df, prices)
+        else:
+            st.caption("📊 銘柄をクリックするとチャートを表示します")
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
