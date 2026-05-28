@@ -1851,7 +1851,6 @@ def main() -> None:
     header_cols = st.columns([5, 2, 2])
     with header_cols[0]:
         st.markdown("#### 📈 Aさん株価ボード")
-        st.caption("📡 株価データは yfinance 取得のため **遅延/準リアルタイム** です")
     with header_cols[1]:
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
             fetch_one.clear()  # キャッシュクリア
@@ -1876,9 +1875,16 @@ def main() -> None:
 
     with st.spinner("価格データ取得中..."):
         prices = fetch_all(visible, period="6mo", provider_name="yfinance")
+    fetched_at = dt.datetime.now()
+
+    # ----- 価格データ鮮度表示 (ヘッダー直下に1か所だけ・タブを問わず共通) -----
+    # 銘柄タイルやPortfolio表内には source / data_time を入れない。
+    st.caption(
+        f"📡 yfinance参考価格 ｜ 最終取得 {fetched_at.strftime('%H:%M')} ｜ "
+        "証券会社画面と差異あり (最終判断は証券会社の正式画面で)"
+    )
 
     # 取得失敗があってもHome画面トップに大きな警告は出さない (各タイル内に「取得失敗」と小さく表示する)。
-    # デバッグ用にcaptionのみ。
 
     # タブ (Chartsタブ廃止・チャートはHomeのexpander内で確認)
     tabs = st.tabs(["🏠 Home", "💼 Portfolio", "⚙️ Settings"])

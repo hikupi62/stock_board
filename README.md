@@ -269,6 +269,26 @@ code,name,shares,avg_price,currency,note
 - 1687 など低流動性ETFの取得失敗は **個別タイル内に小さく「取得失敗」**と表示するだけ (画面上部に大きな黄色警告は出さない)
 - `price_provider.py` の6段fallback (history → 5d → fast_info → info → manual → fail) で多くの場合は `data/manual_prices.csv` で救済される
 
+### 価格データの鮮度表示 (ヘッダー直下に1か所だけ)
+
+yfinanceは遅延/準リアルタイムで、証券会社画面と数円〜数十円ずれることがあるため、価格が **参考値であること** と **最終取得時刻** を明示します。
+
+表示位置:
+- ヘッダー (タイトル / 手動更新 / 自動更新) の **直下に1行 caption** だけ
+- Home / Portfolio / Settings いずれのタブを開いていても **同じ1行が見える** (`st.caption` を `st.tabs` の手前で1回だけ呼ぶため)
+
+表示文言:
+```
+📡 yfinance参考価格 ｜ 最終取得 HH:MM ｜ 証券会社画面と差異あり (最終判断は証券会社の正式画面で)
+```
+
+仕様:
+- `fetched_at = datetime.now()` を `fetch_all` 完了直後に取得し、ヘッダー直下 caption に `HH:MM` で表示
+- **銘柄タイル内には source / data_time / fetched_at を表示しない** (タイルが大きくなるため)
+- **Portfolio表内にも価格取得時刻列を追加しない** (列構成・並び替えを壊さないため)
+- `price_provider.py` の `PriceData.source` 属性は内部追跡のみ・画面には出さない
+- 最終判断は証券会社の正式画面で行う旨を caption に含める
+
 ### チャートの足種
 - **1時間足**: yfinance `interval=60m, period=60d` (**初期表示**) — 日本株では取得不可・欠損のケースあり (取得不可時は警告表示・日足/週足への切替を推奨)
 - **日足**: yfinance `interval=1d, period=1y`
