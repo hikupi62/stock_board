@@ -609,7 +609,10 @@ class AutoProvider(PriceProvider):
         return self.yf.yf_symbol(code, market)
 
     def fetch(self, code: str, market: str, period: str = "6mo") -> PriceData:
-        # snapshot用パス: JP株かつkabu利用可なら kabu優先
+        """snapshot (現在値) 取得: JP株かつkabu利用可なら kabu優先・失敗時 yfinance。
+
+        Home タイル / Portfolio はこの fetch() 経由 (history不要)。
+        """
         market_u = (market or "").upper()
         if market_u == "JP" and self.kabu.available:
             r = self.kabu.fetch(code, market, period=period)
@@ -619,19 +622,12 @@ class AutoProvider(PriceProvider):
 
     def fetch_history(self, code: str, market: str, period: str = "6mo",
                       interval: str = "1d") -> PriceData:
-        """charts需要 (60m/1d/1wk等のhistory) は常にyfinance。
+        """チャート履歴は常に yfinance。
 
-        kabuステーションはsnapshotのみで履歴を返さないため、チャート描画はyfinance必須。
-        snapshot用途 (period='6mo' & interval='1d') でも fetch() を経由しない直接呼び出しは
-        yfinanceに任せる方が安全。
+        kabuステーションは /board の snapshot のみで履歴 (history DataFrame) を
+        返さないため、チャート描画 (1時間足/日足/週足) は必ず yfinance を使う。
+        この関数は fetch_history_cached (= チャート専用) からのみ呼ばれる。
         """
-        # snapshot相当の呼び出しなら kabu試行
-        market_u = (market or "").upper()
-        if (interval == "1d" and period == "6mo"
-                and market_u == "JP" and self.kabu.available):
-            r = self.kabu.fetch_history(code, market, period=period, interval=interval)
-            if r.ok:
-                return r
         return self.yf.fetch_history(code, market, period=period, interval=interval)
 
 

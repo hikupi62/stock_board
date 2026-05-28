@@ -349,9 +349,9 @@ def mini_chart(price: PriceData, height: int = 120) -> None:
 
 # 足種選択肢: ラベル → (interval, period, period_label)
 INTERVAL_OPTIONS: dict[str, tuple[str, str, str]] = {
-    "1時間足": ("60m", "60d", "60日"),
-    "日足": ("1d", "1y", "1年"),
-    "週足": ("1wk", "5y", "5年"),
+    "1時間足": ("60m", "30d", "30日"),
+    "日足": ("1d", "6mo", "半年"),
+    "週足": ("1wk", "3y", "3年"),
 }
 
 
@@ -672,6 +672,10 @@ def inject_home_css() -> None:
             background: #eff6ff;
             box-shadow: 0 2px 6px rgba(31,119,180,0.25);
         }
+        .home-tile.selected .home-tile-name {
+            font-weight: 700;
+            color: #1f77b4;
+        }
         .home-tile-name {
             font-size: 0.85rem;
             font-weight: 600;
@@ -856,6 +860,74 @@ def render_card(row: pd.Series, price: PriceData, position_row: Optional[pd.Seri
 # Pages
 # =============================================================================
 
+def _render_home_chart(sel_code: str, watch_df: pd.DataFrame,
+                       prices: dict[str, PriceData]) -> None:
+    """開いている銘柄のチャートを枠付きコンテナで描画する。
+
+    - 各セクションのタイル一覧直下から呼ばれる (Home最下部固定はしない)
+    - 現在値はkabu/yfinanceどちらでも同じ見た目で表示
+    - チャート履歴は yfinance (kabuはsnapshotのみ)
+    - 「✕ 閉じる」リンク + 同じタイル再クリックの両方で閉じられる
+    """
+    sel_row_df = watch_df[watch_df["code"].astype(str) == str(sel_code)]
+    if sel_row_df.empty:
+        return
+    sel_row = sel_row_df.iloc[0]
+    sel_code = str(sel_row.get("code", "")).strip()
+    sel_name = str(sel_row.get("name", "")).strip() or sel_code
+    sel_market = str(sel_row.get("market", "JP")).strip().upper() or "JP"
+    sel_currency = str(sel_row.get("currency", "JPY")).strip().upper() or "JPY"
+    sel_price = prices.get(sel_code, PriceData(symbol=sel_code, error="未取得"))
+
+    with st.container(border=True):
+        top_l, top_r = st.columns([6, 1])
+        with top_l:
+            if sel_price.ok and sel_price.current_price is not None:
+                cur_text = fmt_price(sel_price.current_price, sel_currency)
+                if sel_price.change_pct is None:
+                    st.markdown(
+                        f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
+                        f"<span style='color:#6b7280; font-weight:600;'>—</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    sign = "+" if sel_price.change_pct >= 0 else ""
+                    if sel_price.change_pct > 0.0001:
+                        color = "#2563eb"
+                    elif sel_price.change_pct < -0.0001:
+                        color = "#dc2626"
+                    else:
+                        color = "#6b7280"
+                    st.markdown(
+                        f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
+                        f"<span style='color:{color}; font-weight:700;'>"
+                        f"{sign}{sel_price.change_pct:.2f}%</span>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption(f"{sel_name} ({sel_code}) — 価格情報の取得に失敗しました")
+        with top_r:
+            # 同じタイル再クリックでも閉じるが、明示的な閉じるリンクも用意
+            st.markdown(
+                '<a href="?select=" target="_self" '
+                'style="text-decoration:none; color:#6b7280;">✕ 閉じる</a>',
+                unsafe_allow_html=True,
+            )
+
+        render_interval_chart(
+            code=sel_code,
+            market=sel_market,
+            name=sel_name,
+            currency=sel_currency,
+            interval_label="1時間足",
+            key_prefix=f"home_sel_{sel_code}",
+            height=340,
+        )
+        link_cols = st.columns(2)
+        link_cols[0].markdown(f"[📊 Yahoo]({yahoo_link(sel_code, sel_market)})")
+        link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(sel_code, sel_market)})")
+
+
 def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     """Home: 世界の株価風タイルグリッド (.home-tile-grid スコープ)。
 
@@ -863,9 +935,10 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     - 各タイル: 銘柄名 / 現在価格 / 前日騰落率 (青/赤/グレー)
     - 1687 ETF は yfinance fallback → manual_prices.csv で価格表示
     - 取得失敗があっても画面トップに大きな警告は出さない (タイル内に小さく "取得失敗")
-    - タイルクリック → ?select={code} で下部に1時間足/日足/週足チャート表示
+    - タイルクリックで開閉: クリックした銘柄が属するセクションの **タイル一覧直下** に
+      チャートが展開される (Home最下部固定はしない)。同じ銘柄を再クリックで閉じる。
     """
-    # クエリパラメータから選択中銘柄を取得
+    # クエリパラメータから選択中銘柄を取得 (HTMLタイルの <a href="?select="> がクリック信号)
     try:
         selected_code = st.query_params.get("select")
         if isinstance(selected_code, list):
@@ -875,6 +948,10 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     except Exception:
         selected_code = None
 
+    # 開閉状態を session_state にも保持 (明示)。
+    # 同じ銘柄の再クリックは _tile_card_html 側で href="?select=" になり閉じる。
+    st.session_state["open_chart_code"] = selected_code
+
     # 大きなタイトル・長い説明文は廃止 (上部はタイルに譲る)
     for group_name in (GROUP_HOLD, GROUP_WATCH):
         sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
@@ -883,63 +960,9 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
         label = "保有銘柄" if group_name == GROUP_HOLD else "Watch銘柄"
         render_home_section(label, sub, prices, selected_code=selected_code)
 
-    # 下部: 選択中銘柄のチャート (クリックされたとき以外は表示しない)
-    if selected_code:
-        sel_row_df = watch_df[watch_df["code"].astype(str) == str(selected_code)]
-        if not sel_row_df.empty:
-            sel_row = sel_row_df.iloc[0]
-            sel_code = str(sel_row.get("code", "")).strip()
-            sel_name = str(sel_row.get("name", "")).strip() or sel_code
-            sel_market = str(sel_row.get("market", "JP")).strip().upper() or "JP"
-            sel_currency = str(sel_row.get("currency", "JPY")).strip().upper() or "JPY"
-            sel_price = prices.get(sel_code, PriceData(symbol=sel_code, error="未取得"))
-
-            st.markdown("---")
-            top_l, top_r = st.columns([6, 1])
-            with top_l:
-                if sel_price.ok and sel_price.current_price is not None:
-                    cur_text = fmt_price(sel_price.current_price, sel_currency)
-                    if sel_price.change_pct is None:
-                        st.markdown(
-                            f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
-                            f"<span style='color:#6b7280; font-weight:600;'>—</span>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        sign = "+" if sel_price.change_pct >= 0 else ""
-                        if sel_price.change_pct > 0.0001:
-                            color = "#2563eb"
-                        elif sel_price.change_pct < -0.0001:
-                            color = "#dc2626"
-                        else:
-                            color = "#6b7280"
-                        st.markdown(
-                            f"**{sel_name}** ({sel_code})　現在値 **{cur_text}**　"
-                            f"<span style='color:{color}; font-weight:700;'>"
-                            f"{sign}{sel_price.change_pct:.2f}%</span>",
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.caption(f"{sel_name} ({sel_code}) — 価格情報の取得に失敗しました")
-            with top_r:
-                st.markdown(
-                    '<a href="?select=" target="_self" '
-                    'style="text-decoration:none; color:#6b7280;">✕ 閉じる</a>',
-                    unsafe_allow_html=True,
-                )
-
-            render_interval_chart(
-                code=sel_code,
-                market=sel_market,
-                name=sel_name,
-                currency=sel_currency,
-                interval_label="1時間足",
-                key_prefix=f"home_sel_{sel_code}",
-                height=340,
-            )
-            link_cols = st.columns(2)
-            link_cols[0].markdown(f"[📊 Yahoo]({yahoo_link(sel_code, sel_market)})")
-            link_cols[1].markdown(f"[📈 TradingView]({tradingview_link(sel_code, sel_market)})")
+        # このセクション内の銘柄が開かれているなら、タイル一覧の直下にチャートを展開
+        if selected_code and str(selected_code) in sub["code"].astype(str).values:
+            _render_home_chart(str(selected_code), watch_df, prices)
 
 
 def page_portfolio(positions_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
