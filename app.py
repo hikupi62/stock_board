@@ -1101,13 +1101,24 @@ def page_home(watch_df: pd.DataFrame, prices: dict[str, PriceData]) -> None:
     )
 
     # Home並び替え (Portfolioとは別物・小さめselectbox)
+    # 注意: index= と key= の併用は「defaultとsession_stateの二重指定」となり、
+    # st.rerun() 直後に selectbox の戻り値が表示値とズレる原因になる。
+    # そのため index は使わず、session_state を一度だけ初期化する方式にする。
+    if "home_sort_mode" not in st.session_state:
+        st.session_state["home_sort_mode"] = HOME_SORT_OPTIONS[0]  # 初回のみ「登録順」
     sort_col, _spacer = st.columns([1.2, 2.8])
     with sort_col:
-        sort_mode = st.selectbox(
-            "並び替え", HOME_SORT_OPTIONS, index=0, key="home_sort_mode",
-        )
+        st.selectbox("並び替え", HOME_SORT_OPTIONS, key="home_sort_mode")
+    # 表示中の値を session_state から取得し、毎回この値で最新pricesを再ソートする。
+    sort_mode = st.session_state.get("home_sort_mode", "登録順")
+
+    # 手動更新直後の強制再ソートフラグ (補助)。
+    # _sort_home_sub は毎回 inline で最新pricesを使うため実質no-opだが、意図を明示。
+    st.session_state.pop("force_home_resort", None)
 
     def _render_tiles() -> None:
+        # 毎回 watch_df + 最新prices + 現在のsort_mode から表示順を計算する
+        # (並び替え済みDataFrameは session_state に保存・cacheしない)。
         for group_name in (GROUP_HOLD, GROUP_WATCH):
             sub = watch_df[(watch_df["group"] == group_name) & (watch_df["is_active"] == 1)]
             if sub.empty:
@@ -2134,10 +2145,13 @@ def main() -> None:
         st.markdown("#### 📈 Aさん株価ボード")
     with header_cols[1]:
         if st.button("🔄 手動更新", type="primary", use_container_width=True):
-            # 価格キャッシュのみクリア。session_state (home_sort_mode 等) と
+            # 価格キャッシュ (現在値・チャート履歴) のみクリアして最新価格を取り直す。
+            # session_state (home_sort_mode / open_chart_code / provider選択) と
             # URLクエリ (?select=) は触らないので、Home並び替え・選択中チャートは維持される。
+            # Home表示順は cache していないため、rerun後に最新pricesで自動再ソートされる。
             fetch_one.clear()
             fetch_history_cached.clear()
+            st.session_state["force_home_resort"] = True  # 補助フラグ (Home側でpopして再ソート明示)
             st.rerun()
     with header_cols[2]:
         interval = st.selectbox("自動更新", ["なし", "60秒", "180秒", "300秒"], index=0)
